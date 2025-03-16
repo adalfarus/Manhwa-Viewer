@@ -1,0 +1,100 @@
+{
+  "metadata": {
+    "newestVersion": "170",
+    "authors": "Adalfarus",
+    "lastUpdated": "2024-11-05",
+    "sorryUrl": "https://github.com/adalfarus/update_check/blob/main/sorry.md"
+  },
+  "versions": [
+    {
+      "versionNumber": "1.0",
+      "description": "[Stable Release]\nInitial release with basic functionality, no database integration and no known bugs.",
+      "updateUrl": "None",
+      "push": "True"
+    },
+    {
+      "versionNumber": "1.3",
+      "description": "[Stable Release]\nAdded basic pop-up functionality and chapter-exporting features.",
+      "updateUrl": "None",
+      "push": "False"
+    },
+    {
+      "versionNumber": "1.4",
+      "description": "[Stable Release]\nCompleted pop-up functionality and added threading.",
+      "updateUrl": "None",
+      "push": "True"
+    },
+    {
+      "versionNumber": "1.5",
+      "description": "[Stable Release]\nUpdated internal content management system.",
+      "updateUrl": "None",
+      "push": "False"
+    },
+    {
+      "versionNumber": "1.6",
+      "description": "[Stable Release]\nImproved UI with dark mode and custom QSS styling for Windows Version versions below 11. \nSwitched graphics package to PySide6 to avoid Licensing.\n The downloading and processing of images has also gotten faster to accommodate for older machines.",
+      "updateUrl": "None",
+      "push": "True"
+    },
+    {
+      "versionNumber": "1.6.1",
+      "description": "[Stable Release]\nIncludes improvements from the current Alpha development phase, with all known bugs resolved.",
+      "updateUrl": "None",
+      "push": "True"
+    },
+    {
+      "versionNumber": "1.6.2",
+      "description": "[Stable Release]\nStable release-ready version with new search feature from the current Alpha developement phase.",
+      "updateUrl": "https://github.com/adalfarus/Manhwa-Viewer-1.6/releases/tag/v.1.6.2",
+      "push": "True"
+    },
+    {
+      "versionNumber": "1.6.3",
+      "description": "[Stable Release]\nMinor bug fixes and small feature enhancements.",
+      "updateUrl": "https://github.com/adalfarus/Manhwa-Viewer-1.6/releases/tag/v1.6.3",
+      "push": "True"
+    },
+    {
+      "versionNumber": "1.6.4",
+      "description": "[Stable Release]\nEnhanced user experience with significantly reduced load times, smooth scrolling, 7 new providers, and simpler provider switching.",
+      "updateUrl": "https://github.com/adalfarus/Manhwa-Viewer-1.6/releases/tag/v1.6.4.1",
+      "push": "True"
+    },
+    {
+      "versionNumber": "1.6.5a0",
+      "description": "[Alpha Release: Not Fully Stable]\nIntroduced various new features and styling options, with lazy loading planned for the full release.",
+      "updateUrl": "https://github.com/adalfarus/Manhwa-Viewer-1.6/releases/tag/v1.6.5a",
+      "push": "False"
+    },
+    {
+      "versionNumber": "1.6.5b0",
+      "description": "[Preview Release]\nAdded custom themes and bug fixes.",
+      "updateUrl": "https://github.com/adalfarus/Manhwa-Viewer-1.6/releases/tag/v1.6.5b",
+      "push": "False"
+    },
+    {
+      "versionNumber": "1.6.5",
+      "description": "[Stable Release]\nAdded custom themes and bug fixes.",
+      "updateUrl": "https://github.com/adalfarus/Manhwa-Viewer-1.6/releases/tag/v1.6.5",
+      "push": "True"
+    },
+    {
+      "versionNumber": "166",
+      "description": "[Stable Release]\nImplemented minor visual bug fixes, added new themes and dramatically reduced executable size.",
+      "updateUrl": "https://github.com/adalfarus/Manhwa-Viewer-1.6/releases/tag/v166",
+      "push": "True"
+    },
+    {
+      "versionNumber": "170a0",
+      "description": "[Alpha Release: Not Fully Stable]\nGeneral performance and UI improvements, with a focus on stabilizing and simplifying enhancements introduced in the last two Alpha and Beta releases.",
+      "updateUrl": "None",
+      "push": "False"
+    },
+    {
+      "versionNumber": "170",
+      "description": "[Stable Release]\nGeneral performance and UI improvements, with a focus on stabilizing and simplifying enhancements:\n-Replaced ScrollArea with a custom GraphicsView\n-Massively improved performance\n-Added OpenGL version (At least for me the OpenGL version seems slower)\n-Dramatically reduced executable size\n-Implemented Lazy Loading\n-Restores old scroll position when resizing",
+      "updateUrl": "https://github.com/adalfarus/Manhwa-Viewer/releases/tag/v170",
+      "push": "True"
+    }
+  ]
+}

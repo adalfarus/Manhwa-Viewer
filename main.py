@@ -120,7 +120,7 @@ class MainWindow(QMainWindow):
 
     def check_for_update(self):
         try:
-            response = requests.get("https://raw.githubusercontent.com/adalfarus/update_check/main/mv/update.json",
+            response = requests.get("https://raw.githubusercontent.com/adalfarus/Manhwa-Viewer/main/update-check.json",
                                     timeout=1)
         except Exception as e:
             title = "Info"
@@ -145,7 +145,7 @@ class MainWindow(QMainWindow):
             if release["versionNumber"] == newest_version:
                 newest_version_data = release
         push = newest_version_data["push"].title() == "True"
-        current_version = "166"
+        current_version = "170"
         found_version = None
 
         # Find a version bigger than the current version and prioritize versions with push
