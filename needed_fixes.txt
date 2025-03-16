@@ -12,12 +12,12 @@
 - progress dialog doesn't show over the stay on top flagged qmainapplication
 
 - touch screen input with more than one finger needed (maybe gestures like zooming, but lower priority right now)
-- flickering of image edges, when scrolling or in right vertical position
-- better compilation results with pyinstaller and nuitka
+- flickering of image edges, when scrolling or in right vertical position  # fixed
+- better compilation results with pyinstaller and nuitka  # fixed
 - add indirect and direct mode (indirect, what direct is at the moment, direct use the href from website
 to go to next chapter, etc. --> direct would require a start manga url [could potentially also extract it from chapter url])
-- better speed for loading chapters
+- better speed for loading chapters  # not planned for mv, but another project
 -> preloading of the previous and the next chapter
-- better exporting of chapters
-- adding support for text only and video (plugins)
-- add support for anime and comic compilation videos
+- better exporting of chapters  # not planned for mv, but another project
+- adding support for text only and video (plugins)  # not planned for mv, but another project
+- add support for anime and comic compilation videos  # not planned for mv, but another project

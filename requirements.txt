@@ -1,12 +1,13 @@
-aplustools==1.4.8.4
+aplustools==2.0.0.0a12
 beautifulsoup4>=4.12.2
 duckduckgo_search==3.9.6
 Pillow>=10.3.0
-PySide6==6.8.0.2
+PySide6==6.8.2.1
 Requests>=2.31.0
 urllib3>=2.1.0
 packaging>=24.0
 stdlib-list>=0.10.0
 aiohttp>=3.9.5
 aiofiles>=23.2.1
-auto-py-to-exe
+auto-py-to-exe>=2.44.2
+pyinstaller>=6.7.0

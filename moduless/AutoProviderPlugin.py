@@ -1,6 +1,6 @@
-from aplustools.data.imagetools import OnlineImage, OfflineImage
+from oaplustools.data.imagetools import OnlineImage, OfflineImage
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from aplustools.web.search import Search
+from oaplustools.web.search import Search
 from urllib.parse import urljoin, urlparse
 from typing import Optional, Union, List
 from requests.sessions import Session
