@@ -3,7 +3,8 @@ import config  # Configures python environment before anything else is done
 
 from PySide6.QtWidgets import (QApplication, QLabel, QVBoxLayout, QWidget, QMainWindow, QCheckBox, QHBoxLayout,
                                QScroller, QSpinBox, QPushButton, QGraphicsOpacityEffect, QScrollerProperties, QFrame,
-                               QComboBox, QFormLayout, QLineEdit, QMessageBox, QScrollBar, QGraphicsProxyWidget)
+                               QComboBox, QFormLayout, QLineEdit, QMessageBox, QScrollBar, QGraphicsProxyWidget,
+                               QCheckBox)
 from PySide6.QtGui import QDesktopServices, QPixmap, QIcon, QDoubleValidator, QFont, QImage
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QRect, QUrl, QSize
 # from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -32,9 +33,11 @@ import math
 import time
 import sys
 import os
+from typing import Literal
 
 import multiprocessing
 import stdlib_list
+from aplustools.io.qtquick import QQuickMessageBox
 multiprocessing.freeze_support()
 hiddenimports = list(stdlib_list.stdlib_list())
 
@@ -44,6 +47,8 @@ os.chdir(os.path.join(os.getcwd(), './_internal'))
 
 
 class MainWindow(QMainWindow):
+    version, version_add = 171, ""
+
     def __init__(self, app):
         super().__init__()
         self.app = app
@@ -57,7 +62,7 @@ class MainWindow(QMainWindow):
 
         self.system = System()
 
-        self.setWindowTitle("Super Manhwa Viewer 170")
+        self.setWindowTitle(f"Super Manhwa Viewer {str(self.version) + self.version_add}")
         self.setWindowIcon(QIcon(f"{self.data_folder}/Untitled-1-noBackground.png"))
 
         db_path = f"{self.data_folder}/data.db"
@@ -118,19 +123,43 @@ class MainWindow(QMainWindow):
         self.check_for_update()
         self.last_reload_ts = time.time()
 
+    def button_popup(self, title: str, text: str, description: str,
+                     icon: Literal["Information", "Critical", "Question", "Warning", "NoIcon"],
+                     buttons: list[str], default_button: str, checkbox: str | None = None) -> tuple[str | None, bool]:
+        if checkbox is not None:
+            checkbox = QCheckBox(checkbox)
+        msg_box = QQuickMessageBox(self, getattr(QMessageBox.Icon, icon), title, text,
+                                   checkbox=checkbox, standard_buttons=None, default_button=None)
+        button_map: dict[str, QPushButton] = {}
+        for button_str in buttons:
+            button = QPushButton(button_str)
+            button_map[button_str] = button
+            msg_box.addButton(button, QMessageBox.ButtonRole.ActionRole)
+        custom_button = button_map.get(default_button)
+        if custom_button is not None:
+            msg_box.setDefaultButton(custom_button)
+        msg_box.setDetailedText(description)
+
+        clicked_button: int = msg_box.exec()
+
+        checkbox_checked = False
+        if checkbox is not None:
+            checkbox_checked = checkbox.isChecked()
+
+        for button_text, button_obj in button_map.items():
+            if msg_box.clickedButton() == button_obj:
+                return button_text, checkbox_checked
+        return None, checkbox_checked
+
     def check_for_update(self):
         try:
             response = requests.get("https://raw.githubusercontent.com/adalfarus/Manhwa-Viewer/main/update-check.json",
-                                    timeout=1)
+                                    timeout=1.0)
         except Exception as e:
             title = "Info"
             text = "There was an error when checking for updates."
             description = f"{e}"
-            msg_box = AdvancedQMessageBox(self, QMessageBox.Icon.Information, title, text, description,
-                                          standard_buttons=QMessageBox.StandardButton.Ok,
-                                          default_button=QMessageBox.StandardButton.Ok)
-
-            msg_box.exec()
+            retval, checkbox_checked = self.button_popup(title, text, description, "Information", ["Ok"], "Ok")
             return
         try:
             update_json = response.json()
@@ -139,80 +168,67 @@ class MainWindow(QMainWindow):
             return
 
         # Initializing all variables
-        newest_version = VersionNumber(update_json["metadata"]["newestVersion"])
-        newest_version_data = update_json["versions"][-1]
+        current_version = VersionNumber(str(self.version) + self.version_add)
+        found_version: VersionNumber | None = None
+        found_release: dict | None = None
+        found_push: bool = False
+
         for release in update_json["versions"]:
-            if release["versionNumber"] == newest_version:
-                newest_version_data = release
-        push = newest_version_data["push"].title() == "True"
-        current_version = "170"
-        found_version = None
+            release_version = VersionNumber(release["versionNumber"])
+            if release_version == current_version:
+                found_version = release_version
+                found_release = release
+                found_push = False  # Doesn't need to be set again
+            if release_version > current_version:
+                push = release["push"].title() == "True"
+                if found_version is None or (release_version > found_version and push):
+                    found_version = release_version
+                    found_release = release
+                    found_push = push
 
-        # Find a version bigger than the current version and prioritize versions with push
-        for version_data in reversed(update_json["versions"]):
-            this_version = VersionNumber(version_data['versionNumber'])
-            push = version_data["push"].title() == "True"
-
-            if this_version > current_version:
-                found_version = version_data
-                if push:
-                    break
-
-        if not found_version:
-            found_version = newest_version_data
-        push = found_version["push"].title() == "True"
-
-        if found_version['versionNumber'] > current_version and self.settings.get_update_info() and push:
+        if found_version > current_version and self.settings.get_update_info() and found_push:
             title = "There is an update available"
-            text = (f"There is a newer version ({found_version.get('versionNumber')}) "
+            text = (f"There is a newer version ({found_version}) "
                     f"available.\nDo you want to open the link to the update?")
-            description = found_version.get("Description")
-            checkbox = QCheckBox("Do not show again")
-            msg_box = AdvancedQMessageBox(self, QMessageBox.Icon.Question, title, text, description, checkbox,
-                                          QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                          QMessageBox.StandardButton.Yes)
-            msg_box.raise_()
-            retval = msg_box.exec()
+            description = f"v{found_version}: {found_release.get('description')}"
+            checkbox = "Do not show again"
+            retval, checkbox_checked = self.button_popup(title, text, description, "Question", ["Yes", "No"], "Yes", checkbox)
 
-            if checkbox.isChecked():
+            if checkbox_checked:
                 print("Do not show again selected")
                 self.settings.set_update_info(False)
-            if retval == QMessageBox.StandardButton.Yes:
-                if found_version.get("updateUrl", "None").title() == "None":
+            if retval == "Yes":
+                if found_release.get("updateUrl", "None").title() == "None":
                     link = update_json["metadata"].get("sorryUrl", "https://example.com")
                 else:
-                    link = found_version.get("updateUrl")
+                    link = found_release.get("updateUrl")
                 QDesktopServices.openUrl(QUrl(link))
-        elif self.settings.get_no_update_info() and (push or found_version['versionNumber'] == current_version):
+        elif self.settings.get_no_update_info() and found_version <= current_version:
             title = "Info"
             text = (f"No new updates available.\nChecklist last updated "
                     f"{update_json['metadata']['lastUpdated'].replace('-', '.')}.")
-            description = f"v{found_version['versionNumber']}\n{found_version.get('description')}"
-            checkbox = QCheckBox("Do not show again")
-            msg_box = AdvancedQMessageBox(self, QMessageBox.Icon.Information, title, text, description, checkbox,
-                                          QMessageBox.StandardButton.Ok, QMessageBox.StandardButton.Ok)
-            msg_box.raise_()
-            msg_box.exec()
+            description = f"v{found_version}: {found_release.get('description')}"
+            checkbox = "Do not show again"
+            retval, checkbox_checked = self.button_popup(title, text, description, "Information", ["Ok"], "Ok",
+                                                         checkbox)
 
-            if checkbox.isChecked():
+            if checkbox_checked:
                 print("Do not show again selected")
                 self.settings.set_no_update_info(False)
-        elif self.settings.get_no_update_info() and not push:
+        elif self.settings.get_no_update_info() and not found_push:
             title = "Info"
-            text = (f"New version available, but not recommended {found_version['versionNumber']}.\n"
+            text = (f"New version available, but not recommended {found_version}.\n"
                     f"Checklist last updated {update_json['metadata']['lastUpdated'].replace('-', '.')}.")
-            description = found_version.get("description")
-            checkbox = QCheckBox("Do not show again")
-            msg_box = AdvancedQMessageBox(self, QMessageBox.Icon.Information, title, text, description,
-                                          checkbox, QMessageBox.StandardButton.Ok, QMessageBox.StandardButton.Ok)
-            msg_box.raise_()
-            msg_box.exec()
+            description = f"v{found_version}: {found_release.get('description')}"
+            checkbox = "Do not show again"
+            retval, checkbox_checked = self.button_popup(title, text, description, "Information", ["Ok"], "Ok",
+                                                         checkbox)
 
-            if checkbox.isChecked():
+            if checkbox_checked:
                 print("Do not show again selected")
                 self.settings.set_no_update_info(False)
         else:
-            print("Bug, please fix me.")
+            self.button_popup("Update Info", "There was a logic-error when checking for updates.", "", "Information", ["Ok"], "Ok")
 
     def setup_gui(self):
         # Central Widget
@@ -657,7 +673,7 @@ class MainWindow(QMainWindow):
 
     def reload_window_title(self):
         new_title = ' '.join(word[0].upper() + word[1:] if word else '' for word in self.provider.get_title().split())
-        self.setWindowTitle(f'SMV 170 | {new_title}, Chapter {self.provider.get_chapter()}')
+        self.setWindowTitle(f'SMV {str(self.version) + self.version_add} | {new_title}, Chapter {self.provider.get_chapter()}')
 
     def get_content_paths(self, allowed_file_formats: tuple = None):
         if allowed_file_formats is None:

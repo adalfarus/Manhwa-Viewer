@@ -2,9 +2,9 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "Super ManhwaViewer OpenGL"
-#define MyAppNameShort "SMV OpenGL 170"
+#define MyAppNameShort "SMV OpenGL 171"
 #define MyAppNameNormalized "smv_opengl"
-#define MyAppVersion "170"
+#define MyAppVersion "171"
 #define MyAppPublisher "Cariel Becker"
 #define MyAppURL "https://www.cariel-becker.com/"
 #define MyAppExeName "main.exe"
@@ -31,7 +31,7 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ;PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=.\
-OutputBaseFilename=smv-opengl-v170-win10-11-x64-installer
+OutputBaseFilename=smv-opengl-v171-win10-11-x64-installer
 SetupIconFile=./data/Untitled-1.ico
 ;Password=88ef5ac2-477c-41c2-afb5-5689a3ae98a5
 ;Encryption=yes
