@@ -25,7 +25,7 @@ If you want to use ManhwaViewer (NMV), just download the latest release [here](h
 
 ## For Users
 
-### MV, NMV and ADMV:
+### MV, NMV, SMV and ADMV:
 
 - **MV** (ManhwaViewer) -> The original Versions from v1.0 to v1.6.4.1, including the content system rewrite in v1.5
 - **NMV** (NewManhwaViewer) -> Quick rewrite that doesn't impact user experience while making ManhwaViewer compatible with new internal systems and removes many bugs. This will include all versions up to 1.6.6/166 .
