@@ -101,6 +101,12 @@
       "description": "[Stable Release]\nBugfix for 170. General performance and UI improvements, with a focus on stabilizing and simplifying enhancements:\n-Replaced ScrollArea with a custom GraphicsView\n-Massively improved performance\n-Added OpenGL version (At least for me the OpenGL version seems slower)\n-Dramatically reduced executable size\n-Implemented Lazy Loading\n-Restores old scroll position when resizing",
       "updateUrl": "https://github.com/adalfarus/Manhwa-Viewer/releases/tag/v171",
       "push": "True"
+    },
+    {
+      "versionNumber": "172",
+      "description": "[Stable Release]\nBugfixes for 171. Completely replaced Provider Structure, fixed some visual and functional bugs with the new GraphicsView.",
+      "updateUrl": "https://github.com/adalfarus/Manhwa-Viewer/releases/tag/v172",
+      "push": "True"
     }
   ]
 }

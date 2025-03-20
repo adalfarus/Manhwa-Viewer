@@ -1,3 +1,5 @@
+from traceback import format_exc
+
 from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout, QDialog, QLineEdit, QPushButton, QDialogButtonBox,
                                QLabel, QScrollBar, QGroupBox, QFormLayout, QRadioButton, QCheckBox, QSpinBox,
                                QApplication, QProgressDialog, QWidget, QListWidget, QSizePolicy, QListWidgetItem,
@@ -233,6 +235,7 @@ class AdvancedSettingsDialog(QDialog):
         self.workersSpinBox = QSpinBox(self.miscSettingsGroupBox)
         self.workersSpinBox.setRange(1, 20)
         self.workersSpinBox.setValue(10)
+        self.workersSpinBox.setEnabled(False)
         self.miscSettingsLayout.addRow(self.autoExportCheckBox)
         self.miscSettingsLayout.addRow(QLabel("Number of Workers:"), self.workersSpinBox)
         self.mainLayout.addWidget(self.miscSettingsGroupBox)
@@ -523,7 +526,7 @@ class TaskRunner(QThread):
         except Exception as e:
             self.success = False
             self.result = None
-            print(f"Error in TaskRunner: {e}")
+            print(f"Error in TaskRunner: {format_exc()}")
 
     def stop(self):
         print("Task is stopping.")
@@ -1484,7 +1487,7 @@ class QGraphicsScrollView(QWidget):
         """TBA"""
         return self._hor_scroll_pol
 
-    def updateScrollBars(self) -> None:
+    def updateScrollBars(self, update_viewport_size: bool = True) -> None:
         """TBA"""
         # Sync with internal scrollbars
         viewport_size = self.graphics_view.size()
@@ -1523,7 +1526,8 @@ class QGraphicsScrollView(QWidget):
         else:
             self._corner_widget.hide()
         self._corner_widget.setFixedSize(self._v_scrollbar.width(), self._h_scrollbar.height())
-        self.graphics_view.resize(viewport_size)
+        if update_viewport_size:
+            self.graphics_view.resize(viewport_size)
         return None
 
     def scrollBarsBackgroundRedraw(self, value: bool) -> None:
@@ -1791,7 +1795,7 @@ class VerticalManagement(BaseManagement):
                     item.setPos(0, total_height)
 
                 total_height += item.get_true_height()
-        self.buttons_widget_proxy.resize(target.graphics_view.viewport().width(), self.buttons_widget_proxy.widget().height())
+        self.buttons_widget_proxy.resize(target.graphics_view.scene().width(), self.buttons_widget_proxy.widget().height())
         self.buttons_widget_proxy.setPos(0, total_height)
             # target.scene.update()
             # target.graphics_view.update()
@@ -1804,9 +1808,11 @@ class VerticalManagement(BaseManagement):
             width = max(items).get_width()
             height = sum(item.get_height() for item in items if isinstance(item, QGraphicsPixmapItem)) + self.buttons_widget_proxy.widget().height()
         else:
-            width = 0
+            width = self.buttons_widget_proxy.widget().width()
             height = self.buttons_widget_proxy.widget().height()
         target.scene.setSceneRect(0, 0, width, height)
+        self.buttons_widget_proxy.resize(target.graphics_view.scene().width(),
+                                         self.buttons_widget_proxy.widget().height())
 
     @staticmethod
     def _isVisibleInViewport(target, item: QScalingGraphicPixmapItem):
@@ -2199,7 +2205,7 @@ class AutoProviderManager:
                 for attribute_name in dir(module):
                     attribute = getattr(module, attribute_name)
                     if (isinstance(attribute, type) and issubclass(attribute, self.prov_plug) and attribute not in
-                            self.prov_sub_plugs):
+                            [self.prov_plug] + self.prov_sub_plugs):
                         providers[attribute_name] = attribute
         return providers
 

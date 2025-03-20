@@ -55,7 +55,7 @@
   },
   {
    "optionDest": "datas",
-   "value": "./cache;cache/"
+   "value": "./caches;caches/"
   },
   {
    "optionDest": "datas",
@@ -162,8 +162,20 @@
    "value": "PySide6.QtGui"
   },
   {
+   "optionDest": "hiddenimports",
+   "value": "requests"
+  },
+  {
    "optionDest": "recursive_copy_metadata",
    "value": "PySide6"
+  },
+  {
+   "optionDest": "recursive_copy_metadata",
+   "value": "requests"
+  },
+  {
+   "optionDest": "recursive_copy_metadata",
+   "value": "BeautifulSoup4"
   }
  ],
  "nonPyinstallerOptions": {

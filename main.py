@@ -11,7 +11,8 @@ from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QRect, QUrl, QSize
 # from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtGui import QColor
 
-from modules.AutoProviderPlugin import AutoProviderPlugin, AutoProviderBaseLike, AutoProviderBaseLike2
+# from modules.AutoProviderPlugin import AutoProviderPlugin, AutoProviderBaseLike, AutoProviderBaseLike2
+from modules.ProviderPlugin import CoreProvider, OnlineProvider, ManhwaLikeProvider
 from modules.Classes import (CustomProgressDialog, ImageLabel, SearchWidget, AdvancedQMessageBox,
                              CustomComboBox, Settings, TargetContainer, VerticalManagement, AutoProviderManager,
                              AdvancedSettingsDialog)
@@ -47,16 +48,21 @@ os.chdir(os.path.join(os.getcwd(), './_internal'))
 
 
 class MainWindow(QMainWindow):
-    version, version_add = 171, ""
+    version, version_add = 172, ""
 
     def __init__(self, app):
         super().__init__()
         self.app = app
 
         self.data_folder = os.path.abspath('./data').strip("/")
-        self.cache_folder = os.path.abspath('./cache').strip("/")
+        self.cache_folder = os.path.abspath('./caches/cache').strip("/")
+        self.last_cache_folder = os.path.abspath('./caches/last_cache').strip("/")
+        self.next_cache_folder = os.path.abspath('./caches/next_cache').strip("/")
         self.modules_folder = os.path.abspath('./modules').strip("/")
         self.extensions_folder = os.path.abspath('./extensions').strip("/")
+
+        for folder in (self.data_folder, self.cache_folder, self.last_cache_folder, self.next_cache_folder, self.modules_folder, self.extensions_folder):
+            os.makedirs(folder, exist_ok=True)
 
         self.logger = monitor_stdout(f"{self.data_folder}/logs.txt")
 
@@ -185,6 +191,9 @@ class MainWindow(QMainWindow):
                     found_version = release_version
                     found_release = release
                     found_push = push
+
+        if found_version is None:  # Current version is bigger than all in update check and not in update check
+            return
 
         if found_version > current_version and self.settings.get_update_info() and found_push:
             title = "There is an update available"
@@ -336,6 +345,8 @@ class MainWindow(QMainWindow):
         self.provider_type_combobox = QComboBox(self)
         self.provider_type_combobox.addItem("Indirect", 0)
         self.provider_type_combobox.addItem("Direct", 1)
+        self.provider_type_combobox.setCurrentText("Direct")
+        self.provider_type_combobox.setEnabled(False)
         side_menu_layout.addRow(self.provider_type_combobox, QLabel("Provider Type"))
 
         previous_chapter_button_side_menu = QPushButton("Previous")
@@ -467,7 +478,7 @@ class MainWindow(QMainWindow):
         blacklist_button.clicked.connect(self.blacklist_current_url)  # Menu
         # Rest
         self.provider_combobox.currentIndexChanged.connect(self.change_provider)  # Menu
-        self.provider_type_combobox.currentIndexChanged.connect(self.change_provider_type)
+        # self.provider_type_combobox.currentIndexChanged.connect(self.change_provider_type)
         self.side_menu_animation.valueChanged.connect(self.side_menu_animation_value_changed)  # Menu
         timer.timeout.connect(self.timer_tick)
         self.search_bar_animation.valueChanged.connect(self.search_bar_animation_value_changed)
@@ -651,15 +662,13 @@ class MainWindow(QMainWindow):
                         f.write(self.fetch_all_data_as_json(f"{self.data_folder}/data.db"))
 
     def switch_provider(self, name: str):
-        provider_name = f"AutoProviderPlugin{name}"
+        provider_name = f"{name}Provider"
         if provider_name not in self.provider_dict:
-            provider_name = f"AutoProviderPlugin{self.settings.get_default_setting('provider')}"
+            provider_name = f"{self.settings.get_default_setting('provider')}Provider"
         provider_cls = self.provider_dict[provider_name]
 
-        self.provider = provider_cls(self.settings.get_title(), self.settings.get_chapter(),
-                                     self.settings.get_chapter_rate(), self.data_folder, self.cache_folder,
-                                     self.settings.get_provider_type(), num_workers=self.settings.get_advanced_settings()["misc"]["num_workers"])
-        self.provider.set_blacklisted_websites(self.settings.get_blacklisted_websites())
+        self.provider = provider_cls(self.settings.get_title(), self.settings.get_chapter(), self.cache_folder, self.data_folder)
+        # self.provider.set_blacklisted_websites(self.settings.get_blacklisted_websites())
 
         if self.provider.get_search_results(None):
             self.search_widget.set_search_results_func(self.provider.get_search_results)
@@ -818,14 +827,20 @@ class MainWindow(QMainWindow):
         self.scrollarea.management.downscaling = self.downscale_checkbox.isChecked()
         self.scrollarea.force_rescaling = True
         self.scrollarea._rescaleImages(QSize(self.scrollarea.width(), self.scrollarea.height()))
+        self.scrollarea._adjustSceneBounds()
         self.scrollarea.graphics_view.resetCachedContent()
+        self.scrollarea.updateScrollBars()
+        self.scrollarea._onScroll()
 
     def upscale_checkbox_toggled(self):
         self.settings.set_upscaling(self.upscale_checkbox.isChecked())
         self.scrollarea.management.upscaling = self.upscale_checkbox.isChecked()
         self.scrollarea.force_rescaling = True
         self.scrollarea._rescaleImages(QSize(self.scrollarea.width(), self.scrollarea.height()))
+        self.scrollarea._adjustSceneBounds()
         self.scrollarea.graphics_view.resetCachedContent()
+        self.scrollarea.updateScrollBars()
+        self.scrollarea._onScroll()
 
     def lazy_loading_toggled(self) -> None:
         self.settings.set_lazy_loading(self.lazy_loading_checkbox.isChecked())
@@ -837,7 +852,10 @@ class MainWindow(QMainWindow):
         self.scrollarea.management.base_width = self.manual_width_spinbox.value()
         self.scrollarea.force_rescaling = True
         self.scrollarea._rescaleImages(QSize(self.scrollarea.width(), self.scrollarea.height()))
+        self.scrollarea._adjustSceneBounds()
         self.scrollarea.graphics_view.resetCachedContent()
+        self.scrollarea.updateScrollBars()
+        self.scrollarea._onScroll()
 
     def set_title(self):
         new_title = self.title_selector.text().strip()
@@ -856,11 +874,11 @@ class MainWindow(QMainWindow):
         new_chapter_rate = float("0" + self.chapter_rate_selector.text())
         if 0.1 <= new_chapter_rate <= 2.0:
             self.settings.set_chapter_rate(new_chapter_rate)
-            self.provider.set_chapter_rate(new_chapter_rate)
+            # self.provider.set_chapter_rate(new_chapter_rate)
             self.chapter_rate_selector.setText(str(new_chapter_rate))
         else:
             self.settings.set_chapter_rate(0.1)
-            self.provider.set_chapter_rate(0.1)
+            # self.provider.set_chapter_rate(0.1)
             self.chapter_rate_selector.setText("0.1")
 
     def update_sensitivity(self, value):
@@ -868,6 +886,10 @@ class MainWindow(QMainWindow):
         self.settings.set_scrolling_sensitivity(sensitivity)
         self.sensitivity_label.setText(f"Current Sensitivity: {sensitivity:.1f}")
         self.scrollarea.graphics_view.sensitivity = sensitivity
+        self.scrollarea.verticalScrollBar().setSingleStep(value * 10)
+        self.scrollarea.verticalScrollBar().setPageStep(value * 100)
+        self.scrollarea.horizontalScrollBar().setSingleStep(value * 10)
+        self.scrollarea.horizontalScrollBar().setPageStep(value * 100)
 
     def selected_chosen_result(self, new_title, toggle_search_bar: bool = True):
         self.title_selector.setText(new_title)
@@ -891,8 +913,9 @@ class MainWindow(QMainWindow):
             self.settings.set_advanced_settings(sett)
 
     def change_provider_type(self):
-        self.settings.set_provider_type(self.provider_type_combobox.currentText().lower())
-        self.provider.set_provider_type(self.settings.get_provider_type())
+        return
+        # self.settings.set_provider_type(self.provider_type_combobox.currentText().lower())
+        # self.provider.set_provider_type(self.settings.get_provider_type())
 
     def blacklist_current_url(self):
         blk_urls = self.provider.get_blacklisted_websites() + [urlparse(self.provider.get_current_url()).netloc]
@@ -906,11 +929,69 @@ class MainWindow(QMainWindow):
         if not callback:
             QTimer.singleShot(50, self.change_provider_callback)
 
+    def advance_cache(self) -> bool:
+        """Advances the cache by rotating the folders. Returns True if cache was already loaded, else False."""
+        if os.path.exists(self.last_cache_folder):  # Delete last_cache
+            shutil.rmtree(self.last_cache_folder)
+        if os.path.exists(self.cache_folder):  # Move cache -> last_cache
+            os.rename(self.cache_folder, self.last_cache_folder)
+        if os.path.exists(self.next_cache_folder):  # Move next_cache -> cache
+            os.rename(self.next_cache_folder, self.cache_folder)
+
+        # Check if cache is already loaded (not empty)
+        files = os.listdir(self.cache_folder) if os.path.exists(self.cache_folder) else []
+        cache_was_loaded = len(files) > 0
+        os.makedirs(self.next_cache_folder, exist_ok=True)  # Create a new next_cache folder
+        return cache_was_loaded
+
+    def retract_cache(self) -> bool:
+        """Retracts the cache by rotating the folders in the opposite direction. Returns True if cache was already loaded, else False."""
+        if os.path.exists(self.next_cache_folder):  # Delete next_cache
+            shutil.rmtree(self.next_cache_folder)
+        if os.path.exists(self.cache_folder):  # Move cache -> next_cache
+            os.rename(self.cache_folder, self.next_cache_folder)
+        if os.path.exists(self.last_cache_folder):  # Move last_cache -> cache
+            os.rename(self.last_cache_folder, self.cache_folder)
+
+        # Check if cache is already loaded (not empty)
+        files = os.listdir(self.cache_folder) if os.path.exists(self.cache_folder) else []
+        cache_was_loaded = len(files) > 0
+        os.makedirs(self.last_cache_folder, exist_ok=True)  # Create a new last_cache folder
+        return cache_was_loaded
+
+    def reset_caches(self) -> None:
+        """Empties all cache folders without deleting them."""
+        self._clear_folder(self.cache_folder)
+        self._clear_folder(self.next_cache_folder)
+        self._clear_folder(self.last_cache_folder)
+
+    def reset_cache(self) -> None:
+        """Empties only the main cache folder."""
+        self._clear_folder(self.cache_folder)
+
+    def reset_next_cache(self) -> None:
+        """Empties only the next_cache folder."""
+        self._clear_folder(self.next_cache_folder)
+
+    def reset_last_cache(self) -> None:
+        """Empties only the last_cache folder."""
+        self._clear_folder(self.last_cache_folder)
+
+    def _clear_folder(self, folder):
+        """Helper function to clear a folder's contents while keeping it intact."""
+        if os.path.exists(folder):
+            for f in os.listdir(folder):
+                file_path = os.path.join(folder, f)
+                if os.path.isfile(file_path) or os.path.islink(file_path):
+                    os.remove(file_path)
+                elif os.path.isdir(file_path):
+                    shutil.rmtree(file_path)
+
     def change_provider_callback(self):
         self.change_provider(callback=True)
-        print("PREV", self.previous_provider, "->", self.provider)
+        print(f"Switching provider {self.previous_provider} -> {self.provider}")
         if type(self.provider) is not type(self.previous_provider):
-            self.provider.redo_prep()
+            self.reset_caches()
             self.reload_content()
 
     # Dynamic movement methods
@@ -987,46 +1068,73 @@ class MainWindow(QMainWindow):
 
     # Rest
     def reload_providers(self):
-        provider_manager = AutoProviderManager(self.extensions_folder, AutoProviderPlugin, [
-                        AutoProviderPlugin, AutoProviderBaseLike, AutoProviderBaseLike2])
+        provider_manager = AutoProviderManager(self.extensions_folder, CoreProvider, [OnlineProvider, ManhwaLikeProvider])
         self.provider_dict = provider_manager.get_providers()
 
         self.provider_combobox.clear()
+        last_working_provider = None
+        saved_provider_working = False
+        saved_provider = self.settings.get_provider()
 
-        for i, provider_name in enumerate(self.provider_dict.keys()):
-            provider = self.provider_dict[provider_name]("", 1, 0.5, self.data_folder, self.cache_folder, "direct")
+        i = 0
+        for provider_cls_name in self.provider_dict.keys():
+            provider = self.provider_dict[provider_cls_name]("", 0, self.cache_folder, self.data_folder)
+
+            if not provider.can_work():
+                continue
 
             icon_path = provider.get_logo_path()
             image = QImage(os.path.abspath(icon_path))
+            image_width, image_height = image.width(), image.height()
 
-            if provider.clipping_space is not None:
+            if provider.clipping_space:
                 start_x, start_y, end_x, end_y = provider.clipping_space
 
-                print("Cropping", image.height(), "x", image.width(), "for", provider_name)
-                cropped_image = image.copy(start_y if start_y != "max" else image.width(),
-                                           start_x if start_x != "max" else image.height(),
-                                           end_y if end_y != "max" else image.width(),
-                                           end_x if end_x != "max" else image.height())
+                start_x = start_x if start_x != "max" else image_height
+                start_y = start_y if start_y != "max" else image_width
+                end_x = end_x if end_x != "max" else image_height
+                end_y = end_y if end_y != "max" else image_width
+
+                print(f"Cropping {image_height} x {image_width} for {provider_cls_name}")
+                cropped_image = image.copy(start_y, start_x, end_y, end_x)
             else:
-                print("Cube cropping", image.height(), "for", provider_name)
-                cropped_image = image.copy(0, 0, image.height(), image.height())
+                print(f"Cube cropping {image_height} for {provider_cls_name}")
+                cropped_image = image.copy(0, 0, image_height, image_height)
+
             icon = QIcon(QPixmap.fromImage(cropped_image))
 
             # Add item to the dropdown
-            self.provider_combobox.addItem(icon, provider_name.replace("AutoProviderPlugin", ""))
-            if "AutoProviderPlugin" not in provider_name:
+            provider_name = provider_cls_name.removesuffix("Provider")
+            self.provider_combobox.addItem(icon, provider_name)
+            if not provider.is_working():
+                item = self.provider_combobox.model().item(i)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            else:
+                if provider_name == saved_provider:
+                    saved_provider_working = True
+                last_working_provider = provider_name  # Track last working provider
+            if "Provider" not in provider_cls_name:
                 self.provider_combobox.setItemUnselectable(i)
-        self.provider_combobox.setCurrentText(self.settings.get_provider())
+            i += 1
+        if saved_provider_working:
+            print(f"Saved provider ({saved_provider}) working")
+            self.provider_combobox.setCurrentText(saved_provider)
+        elif last_working_provider is not None:
+            print(f"Other working provider ({last_working_provider})")
+            self.provider_combobox.setCurrentText(last_working_provider)  # Fallback to last working provider
+        else:
+            print("No working provider")
+            self.provider_combobox.setCurrentIndex(-1)  # No selection if no working provider found
 
     def save_settings(self):
         if hasattr(self, "settings") and self.settings.is_open:
             self.settings.set_provider(self.provider_combobox.currentText())
             self.settings.set_title(self.provider.get_title())
             self.settings.set_chapter(self.provider.get_chapter())
-            self.settings.set_chapter_rate(self.provider.get_chapter_rate())
-            self.settings.set_provider_type(self.provider.get_provider_type())
+            self.settings.set_chapter_rate(float(self.chapter_rate_selector.text()))
+            # self.settings.set_provider_type(self.provider.get_provider_type())
 
-            self.settings.set_blacklisted_websites(self.provider.get_blacklisted_websites())
+            # self.settings.set_blacklisted_websites(self.provider.get_blacklisted_websites())
 
             self.settings.set_hover_effect_all(self.hover_effect_all_checkbox.isChecked())
             self.settings.set_borderless(self.borderless_checkbox.isChecked())
@@ -1052,13 +1160,13 @@ class MainWindow(QMainWindow):
             self.settings.set_scrolling_sensitivity(self.scroll_sensitivity_scroll_bar.value() / 10)
 
     def reload_gui(self, reload_geometry: bool = False, reload_position: bool = False):
-        self.provider_combobox.setCurrentText(self.settings.get_provider())
+        # self.provider_combobox.setCurrentText(self.settings.get_provider())
         self.title_selector.setText(self.settings.get_title())
         self.chapter_selector.setText(str(self.settings.get_chapter()))
         self.chapter_rate_selector.setText(str(self.settings.get_chapter_rate()))
-        self.provider_type_combobox.setCurrentText(self.settings.get_provider_type().title())
+        # self.provider_type_combobox.setCurrentText(self.settings.get_provider_type().title())
 
-        self.provider.set_blacklisted_websites(self.settings.get_blacklisted_websites())
+        # self.provider.set_blacklisted_websites(self.settings.get_blacklisted_websites())
 
         self.hover_effect_all_checkbox.setChecked(self.settings.get_hover_effect_all())
         self.borderless_checkbox.setChecked(self.settings.get_borderless())
@@ -1177,7 +1285,6 @@ class MainWindow(QMainWindow):
         self.threading = False
 
     def chapter_loading_wrapper(self, func, fail_info, fail_text):
-        self.provider.redo_prep()
         self.threading_wrapper(True, True, func)
 
         if self.task_successful:
@@ -1187,7 +1294,7 @@ class MainWindow(QMainWindow):
             self.save_last_title(self.provider.get_title())
         else:
             self.provider.set_chapter(self.settings.get_chapter())
-            self.provider.reload_chapter()
+            self.provider.load_current_chapter()
             QMessageBox.information(self, fail_info, fail_text,
                                     QMessageBox.StandardButton.Ok,
                                     QMessageBox.StandardButton.Ok)
@@ -1197,16 +1304,43 @@ class MainWindow(QMainWindow):
         self.scrollarea.horizontalScrollBar().setValue((self.scrollarea.width() // 2))
         self.reload_content()
 
-    def next_chapter(self):
-        self.chapter_loading_wrapper(self.provider.next_chapter, "Info | Loading of chapter has failed!",
-                                     "The loading of the next chapter has failed.\nLook in the logs for more info.")
+    def next_chapter(self) -> None:
+        self.provider.increase_chapter(self.settings.get_chapter_rate())
+        is_already_loaded: bool = self.advance_cache()
+        if not is_already_loaded:
+            self.chapter_loading_wrapper(self.provider.load_current_chapter, "Info | Loading of chapter has failed!",
+                                         "The loading of the next chapter has failed.\nLook in the logs for more info.")
+        else:
+            self.reload_window_title()
+            self.settings.set_chapter(self.provider.get_chapter())
+            self.task_successful = False
+            self.save_last_title(self.provider.get_title())
+            self.chapter_selector.setText(str(self.settings.get_chapter()))
+            print("Reloading images ...")
+            self.scrollarea.verticalScrollBar().setValue(0)
+            self.scrollarea.horizontalScrollBar().setValue((self.scrollarea.width() // 2))
+            self.reload_content()
 
-    def previous_chapter(self):
-        self.chapter_loading_wrapper(self.provider.previous_chapter, "Info | Loading of chapter has failed!",
-                                     "The loading of the previous chapter has failed.\nLook in the logs for more info.")
+    def previous_chapter(self) -> None:
+        self.provider.increase_chapter(-self.settings.get_chapter_rate())
+        is_already_loaded: bool = self.retract_cache()
+        if not is_already_loaded:
+            self.chapter_loading_wrapper(self.provider.load_current_chapter, "Info | Loading of chapter has failed!",
+                                         "The loading of the previous chapter has failed.\nLook in the logs for more info.")
+        else:
+            self.reload_window_title()
+            self.settings.set_chapter(self.provider.get_chapter())
+            self.task_successful = False
+            self.save_last_title(self.provider.get_title())
+            self.chapter_selector.setText(str(self.settings.get_chapter()))
+            print("Reloading images ...")
+            self.scrollarea.verticalScrollBar().setValue(0)
+            self.scrollarea.horizontalScrollBar().setValue((self.scrollarea.width() // 2))
+            self.reload_content()
 
-    def reload_chapter(self):
-        self.chapter_loading_wrapper(self.provider.reload_chapter, "Info | Reloading of chapter has failed",
+    def reload_chapter(self) -> None:
+        self.reset_cache()
+        self.chapter_loading_wrapper(self.provider.load_current_chapter, "Info | Reloading of chapter has failed",
                                      "The reloading the current chapter has failed.\nLook in the logs for more info.")
 
     # Window Methods

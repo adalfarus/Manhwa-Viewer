@@ -5,6 +5,8 @@ __pycache__/
 
 .idea/
 .vs/
+test_run/
+output/
 
 # C extensions
 *.so
