@@ -4,7 +4,7 @@ If you want to use ManhwaViewer (NMV), just download the latest release [here](h
 
 ### Version showcases:
 
-#### SMV171
+#### SMV171 & SMV172
 <p float="center">
   <img src="/repo_images/repo_image_11.png" width="90%" />
 </p>
