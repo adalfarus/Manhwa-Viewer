@@ -1,6 +1,6 @@
 # ManhwaViewer (SMV)
 
-If you want to use ManhwaViewer (NMV), just download the latest release [here](https://github.com/adalfarus/Manhwa-Viewer-1.6/releases/latest).
+If you want to use ManhwaViewer, just download the latest release [here](https://github.com/adalfarus/Manhwa-Viewer-1.6/releases/latest).
 
 ### Version showcases:
 
