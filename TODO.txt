@@ -1,0 +1,22 @@
+Todo:
+- fix cache resetting
+
+Done:
+- Add error info if transferring task fails
+- Fix recent titles not removing others that are too similar
+- Fix recent titles adding from wrong provider
+- Implement transfer loading wrapper
+- Fix bug where it hangs on chapter after failure while transferring
+- Implement search all
+- last titles -> last titles + chapters + providers
+- Make sure selecting last title doesn't erase another last title
+- Make it so empty chapters say "Maybe this chapter doesn't exist?"
+- Fix chapter float sometimes
+- Make it so an empty library is ignored
+- Investigate why Std->DeepC doesn't reset the library
+- implement transfer chapter(s) and export settings-file
+- Add quality presets for saver in adv settings (from deep c storage)
+- Add lib to settings
+- Add saver to settings
+- Finish lib selector
+- Remove strange split from lib selector as we can just use self._libraries with current index now

@@ -1,13 +1,8 @@
-# ManhwaViewer (SMV)
+# ManhwaViewer (NMV)
 
-If you want to use ManhwaViewer, just download the latest release [here](https://github.com/adalfarus/Manhwa-Viewer-1.6/releases/latest).
+If you want to use ManhwaViewer (NMV), just download the latest release [here](https://github.com/adalfarus/Manhwa-Viewer-1.6/releases/latest).
 
 ### Version showcases:
-
-#### SMV171 & SMV172
-<p float="center">
-  <img src="/repo_images/repo_image_11.png" width="90%" />
-</p>
 
 #### MV1.6.2 vs MV1.5
 <p float="center">
@@ -30,12 +25,12 @@ If you want to use ManhwaViewer, just download the latest release [here](https:/
 
 ## For Users
 
-### MV, NMV, SMV and ADMV:
+### MV, NMV and ADMV:
 
 - **MV** (ManhwaViewer) -> The original Versions from v1.0 to v1.6.4.1, including the content system rewrite in v1.5
-- **NMV** (NewManhwaViewer) -> Quick rewrite that doesn't impact user experience while making ManhwaViewer compatible with new internal systems and removes many bugs. This will include all versions up to 1.6.6/166 .
-- **SMV** (SuperManhwaViewer) -> Thorough rewrite that uses key insights from other projects. This will include all versions from 1.7.0/170 to 2.0.0/200 .
-- **ADMV** (ActDirectManhwaViewer) \[**PLANNED**\] -> A modern version using ActDirect, that uses best practices, is really compatible, efficient and configurable and makes important changes for further apps. If it's made, this version will be released after SMV 2.0.0/200 .
+- **NMV** (NewManhwaViewer) -> Quick rewrite that doesn't impact user experience while making ManhwaViewer compatible with new internal systems and removes many bugs. This will include all versions up to 1.7.0/170 .
+- **SMV** (SuperManhwaViewer) -> Thorough rewrite that uses key insights from other projects. This will include all versions up to 2.0.0/200 .
+- **ADMV** (ActDirectManhwaViewer) \[**PLANNED**\] -> A modern version using ActDirect, that uses best practices, is really compatible, efficient and configurable and makes important changes for further apps. This version will be released as ADMV 2.0.0/200
 
 ### New Versioning:
 

@@ -1,0 +1,117 @@
+{
+ "version": "auto-py-to-exe-configuration_v1",
+ "pyinstallerOptions": [
+  {
+   "optionDest": "noconfirm",
+   "value": true
+  },
+  {
+   "optionDest": "filenames",
+   "value": "./nmv.py"
+  },
+  {
+   "optionDest": "onefile",
+   "value": false
+  },
+  {
+   "optionDest": "console",
+   "value": false
+  },
+  {
+   "optionDest": "icon_file",
+   "value": "./data/Untitled-1.ico"
+  },
+  {
+   "optionDest": "clean_build",
+   "value": false
+  },
+  {
+   "optionDest": "strip",
+   "value": false
+  },
+  {
+   "optionDest": "noupx",
+   "value": false
+  },
+  {
+   "optionDest": "disable_windowed_traceback",
+   "value": false
+  },
+  {
+   "optionDest": "uac_admin",
+   "value": false
+  },
+  {
+   "optionDest": "uac_uiaccess",
+   "value": false
+  },
+  {
+   "optionDest": "argv_emulation",
+   "value": false
+  },
+  {
+   "optionDest": "bootloader_ignore_signals",
+   "value": false
+  },
+  {
+   "optionDest": "datas",
+   "value": "./cache;cache/"
+  },
+  {
+   "optionDest": "datas",
+   "value": "./data;data/"
+  },
+  {
+   "optionDest": "datas",
+   "value": "./extensions;extensions/"
+  },
+  {
+   "optionDest": "datas",
+   "value": "./libs;libs/"
+  },
+  {
+   "optionDest": "datas",
+   "value": "./config.py;."
+  },
+  {
+   "optionDest": "datas",
+   "value": "./.venv/Lib/site-packages/stdlib_list;stdlib_list/"
+  },
+  {
+   "optionDest": "datas",
+   "value": "./moduless;moduless/"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "aplustools.data.imagetools"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "aplustools.web.search"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "requests.sessions"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "aiohttp"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "aiofiles"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "bs4"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "aplustools.package.timid"
+  }
+ ],
+ "nonPyinstallerOptions": {
+  "increaseRecursionLimit": true,
+  "manualArguments": ""
+ }
+}
