@@ -176,6 +176,10 @@
   {
    "optionDest": "recursive_copy_metadata",
    "value": "BeautifulSoup4"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "ctypes.util"
   }
  ],
  "nonPyinstallerOptions": {

@@ -1,0 +1,56 @@
+Todo:
+- Add more providers
+- Make sure provider image is never wider than window
+- Add open logs button (maybe on the error message?)
+- Search with js too when js enabled
+- Fix zinmanga not working
+- Add more / all js providers
+- Add a general cleanup method to the CoreProvider where shared resources are cleaned up at app-exit
+- Add register_library_name / register_provider_name
+
+Not planned:
+- Make it possible to transfer from one library to another by reusing can use library as can use title as path?
+-> Too deep for normal people to understand, would have to select uuid4 folder of the title as the path, which is hard if you don't understand it in-depth
+- Make library providers compatible with one another? How to solve different provider for different chapters?
+
+Done:
+- Add js provider
+- Fix advanced settings not saving
+- Add ComicBook metadata to libraryprovider metadata
+- Added show not recommended update info setting
+- Add "Take me there" button for not recommended updates
+- Tutorial popup
+- Tiff library
+- WebP library
+- ComicBook library
+- Style popups
+- Set max cached chapters in adv settings (-1 means infinite)
+- Update advanced settings with defaults
+- LikeManga provider is working with header test
+- Read library name from library not from database
+- Set library name to library if changed
+- Fix coffeemanga provider
+- fix cache resetting
+-> New caching system (1.0, 3.5, ...) instead of previous, current and next
+-> Transferring of chapters can occur in the background (hide the window)
+--> Just show them if the user tries to switch titles.
+-> If User switches titles, invalidate all caches
+-> Pass cache folder to chapter loading method
+- Add error info if transferring task fails
+- Fix recent titles not removing others that are too similar
+- Fix recent titles adding from wrong provider
+- Implement transfer loading wrapper
+- Fix bug where it hangs on chapter after failure while transferring
+- Implement search all
+- last titles -> last titles + chapters + providers
+- Make sure selecting last title doesn't erase another last title
+- Make it so empty chapters say "Maybe this chapter doesn't exist?"
+- Fix chapter float sometimes
+- Make it so an empty library is ignored
+- Investigate why Std->DeepC doesn't reset the library
+- implement transfer chapter(s) and export settings-file
+- Add quality presets for saver in adv settings (from deep c storage)
+- Add lib to settings
+- Add saver to settings
+- Finish lib selector
+- Remove strange split from lib selector as we can just use self._libraries with current index now

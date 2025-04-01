@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout, QDialog, QLineEdit, QPu
                                QLabel, QScrollBar, QGroupBox, QFormLayout, QRadioButton, QCheckBox, QSpinBox,
                                QApplication, QProgressDialog, QWidget, QListWidget, QSizePolicy, QListWidgetItem,
                                QMessageBox, QStyledItemDelegate, QComboBox, QToolButton, QFileDialog, QLayout,
-                               QFontComboBox, QGraphicsProxyWidget, QGraphicsItem)
+                               QFontComboBox, QGraphicsProxyWidget, QGraphicsItem, QProgressBar, QScrollArea, QFrame)
 from PySide6.QtCore import Qt, Signal, QThread, QTimer, Slot, QSize, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QPainter, QBrush, QColor, QPen, QPalette, QIcon, QPixmap, QFont, QWheelEvent
 # from aplustools.io import environment as env
@@ -151,7 +151,7 @@ class QSmoothScrollingList(QListWidget):
 
 
 class AdvancedSettingsDialog(QDialog):
-    def __init__(self, parent=None, current_settings: dict = None, default_settings: dict = None, master=None, available_themes=None):
+    def __init__(self, parent=None, current_settings: dict = None, default_settings: dict = None, master=None, available_themes=None, export_settings_func=None):
         super().__init__(parent, Qt.WindowCloseButtonHint | Qt.WindowTitleHint)
 
         if default_settings is None:
@@ -159,7 +159,7 @@ class AdvancedSettingsDialog(QDialog):
                                      "themes": {"light": "light_light", "dark": "dark", "font": "Segoe UI"},
                                      "settings_file_path": "",
                                      "settings_file_mode": "overwrite",
-                                     "misc": {"auto_export": False, "num_workers": 10}}
+                                     "misc": {"auto_export": False, "quality_preset": "quality", "max_cached_chapters": -1}}
         else:
             self.default_settings = default_settings
         if current_settings is None:
@@ -167,6 +167,7 @@ class AdvancedSettingsDialog(QDialog):
         self.current_settings = current_settings
         self.selected_settings = None
         self.master = master
+        self.export_settings_func = export_settings_func
 
         if available_themes is None:
             available_themes = ('light', 'light_light', 'dark', 'light_dark', 'modern', 'old', 'default')
@@ -216,11 +217,16 @@ class AdvancedSettingsDialog(QDialog):
         self.modifyRadioButton = QRadioButton("Modify", self.fileHandlingGroupBox)
         self.createNewRadioButton = QRadioButton("Create New", self.fileHandlingGroupBox)
         self.overwriteRadioButton.setChecked(True)
-        self.loadSettingsPushButton = QPushButton("Load Settings File")
+        self.exportSettingsPushButton = QPushButton("Export Settings-file")
+        self.exportSettingsPushButton.clicked.connect(self.export_settings)
+        # self.exportSettingsPushButton.setEnabled(False)
+        self.loadSettingsPushButton = QPushButton("Load Settings-file")
         self.loadSettingsPushButton.clicked.connect(self.load_settings_file)
-        last_layout = QNoSpacingHBoxLayout()
+        last_layout = QHBoxLayout()
+        last_layout.setContentsMargins(0, 0, 0, 0)
         last_layout.addWidget(self.createNewRadioButton)
         last_layout.addStretch()
+        last_layout.addWidget(self.exportSettingsPushButton)
         last_layout.addWidget(self.loadSettingsPushButton)
         self.fileHandlingLayout.addLayout(self.fileLocationLayout)
         self.fileHandlingLayout.addWidget(self.overwriteRadioButton)
@@ -229,15 +235,27 @@ class AdvancedSettingsDialog(QDialog):
         self.mainLayout.addWidget(self.fileHandlingGroupBox)
 
         # Auto-Export and Workers
-        self.miscSettingsGroupBox = QGroupBox("Miscellaneous Settings", self)
+        self.miscSettingsGroupBox = QGroupBox("Chapter Management Settings", self)
         self.miscSettingsLayout = QFormLayout(self.miscSettingsGroupBox)
-        self.autoExportCheckBox = QCheckBox("Enable Auto-Export", self.miscSettingsGroupBox)
-        self.workersSpinBox = QSpinBox(self.miscSettingsGroupBox)
-        self.workersSpinBox.setRange(1, 20)
-        self.workersSpinBox.setValue(10)
-        self.workersSpinBox.setEnabled(False)
+        self.autoExportCheckBox = QCheckBox("Enable Auto-Transfer", self.miscSettingsGroupBox)
+        # self.autoExportCheckBox.setEnabled(False)
+        # self.workersSpinBox = QSpinBox(self.miscSettingsGroupBox)
+        # self.workersSpinBox.setRange(1, 20)
+        # self.workersSpinBox.setValue(10)
+        # self.workersSpinBox.setEnabled(False)
+        self.quality_combo = QComboBox(self.miscSettingsGroupBox)
+        self.quality_combo.addItems([
+            "Best Quality",
+            "Quality",
+            "Size",
+            "Smallest Size"
+        ])
         self.miscSettingsLayout.addRow(self.autoExportCheckBox)
-        self.miscSettingsLayout.addRow(QLabel("Number of Workers:"), self.workersSpinBox)
+        # self.miscSettingsLayout.addRow(QLabel("Number of Workers:"), self.workersSpinBox)
+        self.miscSettingsLayout.addRow(QLabel("Auto-Transfer Quality preset:"), self.quality_combo)
+        self.max_cached_chapters_spinbox = QSpinBox(self.miscSettingsGroupBox, minimum=-1, singleStep=1)
+        self.miscSettingsLayout.addRow(QLabel("Max cached chapters:"), self.max_cached_chapters_spinbox)
+
         self.mainLayout.addWidget(self.miscSettingsGroupBox)
 
         self.load_settings(self.current_settings)
@@ -266,12 +284,13 @@ class AdvancedSettingsDialog(QDialog):
     def fix_size(self):
         self.setFixedSize(self.size())
 
-    def selected_title(self, item):
+    def selected_title(self, item: QListWidgetItem):
         name = item.text()
+        idx = self.recentTitlesList.row(item)
         if not self.master.settings.is_open:
             self.master.settings.connect()
         self.reject()
-        self.master.selected_chosen_result(name, toggle_search_bar=False)
+        self.master.selected_chosen_item(self.current_settings["recent_titles"][idx], toggle_search_bar=False)
         self.master.toggle_side_menu()
 
     def get_file_location(self):
@@ -283,6 +302,20 @@ class AdvancedSettingsDialog(QDialog):
         if not file_path:  # No file was selected
             return
         self.fileLocationLineEdit.setText(file_path)
+
+    def export_settings(self):
+        if self.export_settings_func is not None:
+            self.export_settings_func({
+            "recent_titles": self.current_settings["recent_titles"],
+            "themes": {
+                "light": self._save_theme(self.lightThemeComboBox.currentText()),
+                "dark": self._save_theme(self.darkThemeComboBox.currentText()),
+                "font": self.fontComboBox.currentText()},
+            "settings_file_path": self.fileLocationLineEdit.text(),
+            "settings_file_mode": "overwrite" if self.overwriteRadioButton.isChecked() else "modify" if self.modifyRadioButton.isChecked() else "create_new",
+            "misc": {"auto_export": self.autoExportCheckBox.isChecked(), "quality_preset": self.quality_combo.currentText().lower().replace(" ", "_"),
+                     "max_cached_chapters": self.max_cached_chapters_spinbox.value()}})
+                     #"num_workers": self.workersSpinBox.value()}})
 
     def load_settings_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, 'Choose File', self.fileLocationLineEdit.text(),
@@ -360,11 +393,20 @@ class AdvancedSettingsDialog(QDialog):
 
         return formatted_name
 
-    def load_settings(self, settings: dict):
+    def format_title(self, title: str) -> str:
+        return ' '.join(word[0].upper() + word[1:] if word else '' for word in title.lower().split())
+
+    def load_settings(self, settings: dict) -> None:
         self.recentTitlesList.clear()
-        recent_titles = settings.get("recent_titles")
+        recent_titles: list[str] = settings.get("recent_titles")
         recent_titles.reverse()
-        self.recentTitlesList.addItems((' '.join(word[0].upper() + word[1:] if word else '' for word in title.split()) for title in recent_titles))
+        for recent_title in recent_titles:
+            prov, title, chap, *_ = recent_title.split("\x00") + ["", ""]
+            if not _:
+                title = prov
+                prov = ""
+                chap = "0"
+            self.recentTitlesList.addItem(f"{prov}: {self.format_title(title)}, Ch {chap}")
 
         light_theme = settings.get("themes").get("light")
         dark_theme = settings.get("themes").get("dark")
@@ -389,7 +431,9 @@ class AdvancedSettingsDialog(QDialog):
             self.createNewRadioButton.setChecked(True)
 
         self.autoExportCheckBox.setChecked(settings.get("misc").get("auto_export") is True)
-        self.workersSpinBox.setValue(settings.get("misc").get("num_workers"))
+        # self.workersSpinBox.setValue(settings.get("misc").get("num_workers"))
+        self.quality_combo.setCurrentText(settings.get("misc").get("quality_preset").replace("_", " ").title())
+        self.max_cached_chapters_spinbox.setValue(settings.get("misc").get("max_cached_chapters"))
 
     def revert_last_saved(self):
         # Logic to revert settings to the last saved state
@@ -421,15 +465,16 @@ class AdvancedSettingsDialog(QDialog):
     def accept(self):
         # Collect all settings here for processing
         self.selected_settings = {
-            "recent_titles": list(reversed([self.recentTitlesList.item(x).text().lower() for x in range(self.recentTitlesList.count())])),
+            "recent_titles": self.current_settings["recent_titles"],
             "themes": {
                 "light": self._save_theme(self.lightThemeComboBox.currentText()),
                 "dark": self._save_theme(self.darkThemeComboBox.currentText()),
                 "font": self.fontComboBox.currentText()},
             "settings_file_path": self.fileLocationLineEdit.text(),
             "settings_file_mode": "overwrite" if self.overwriteRadioButton.isChecked() else "modify" if self.modifyRadioButton.isChecked() else "create_new",
-            "misc": {"auto_export": self.autoExportCheckBox.isChecked(),
-                     "num_workers": self.workersSpinBox.value()}}
+            "misc": {"auto_export": self.autoExportCheckBox.isChecked(), "quality_preset": self.quality_combo.currentText().lower().replace(" ", "_"),
+                     "max_cached_chapters": self.max_cached_chapters_spinbox.value()}}
+                     # "num_workers": self.workersSpinBox.value()}}
 
         super().accept()
 
@@ -463,7 +508,7 @@ class TaskRunner(QThread):
     task_completed = Signal(bool, object)
     progress_signal = Signal(int)
 
-    def __init__(self, new_thread, func, *args, **kwargs):
+    def __init__(self, new_thread, func, args, kwargs):
         super().__init__()
         self.new_thread = new_thread
         self.func = func
@@ -506,7 +551,7 @@ class TaskRunner(QThread):
                         self.progress_signal.emit(update)
                 self.result = update
                 print("RES", self.result)
-            self.task_completed.emit(self.success, self.result)
+            self.task_completed.emit(self.success and self.result, self.result)  # As the result is a bool to check status
 
         except Exception as e:
             self.task_completed.emit(False, None)
@@ -550,8 +595,10 @@ class TaskRunner(QThread):
 
 class CustomProgressDialog(QProgressDialog):
     def __init__(self, parent, window_title, window_icon, window_label="Doing a task...", button_text="Cancel",
-                 new_thread=True, func=lambda: None, *args, **kwargs):
+                 new_thread=True, func=lambda: None, args=(), kwargs=None):
         super().__init__(parent=parent, cancelButtonText=button_text, minimum=0, maximum=100)
+        if kwargs is None:
+            kwargs = {}
         self.ttimer = TimidTimer()
         self.setWindowTitle(window_title)
         # self.setValue(0)
@@ -562,7 +609,7 @@ class CustomProgressDialog(QProgressDialog):
         self.customLayout.addWidget(self.customLabel)
         self.customLayout.setAlignment(self.customLabel, Qt.AlignTop | Qt.AlignHCenter)
 
-        self.taskRunner = TaskRunner(new_thread, func, *args, **kwargs)
+        self.taskRunner = TaskRunner(new_thread, func, args=args, kwargs=kwargs)
         self.taskRunner.task_completed.connect(self.onTaskCompleted)
         self.taskRunner.progress_signal.connect(self.set_value)  # Connect progress updates
         self.task_successful = False
@@ -638,12 +685,14 @@ class CustomProgressDialog(QProgressDialog):
                 self.setPalette(palette)
                 self.customLabel.setText("Task failed!")
                 self.setCancelButtonText("Close")
+                QTimer.singleShot(1, self.accept)  # Close after 1 second if successful
         print("DONE", self.ttimer.end())
 
     def cancelTask(self):
-        self.taskRunner.stop()
-        self.taskRunner.wait()
-        self.setValue(0)
+        if self.taskRunner.isRunning():
+            self.taskRunner.stop()
+            self.taskRunner.wait()
+        # self.setValue(0)
         self.customLabel.setText("Task cancelled")
         self.close()
 
@@ -651,6 +700,262 @@ class CustomProgressDialog(QProgressDialog):
         if self.taskRunner.isRunning():
             self.cancelTask()
         event.accept()
+
+
+class TaskWidget(QWidget):
+    task_done = Signal(object)  # Signal to notify TaskBar that task is done
+
+    def __init__(self, name: str, func, args=(), kwargs=None, new_thread=True):
+        super().__init__()
+        self.name = name
+        self.func = func
+        self.args = args
+        self.kwargs = kwargs or {}
+        self.new_thread = new_thread
+        self.task_successful = False
+        self.task_canceled = False
+
+        self.main_layout = QHBoxLayout(self)
+        self.main_layout.setContentsMargins(4, 2, 4, 2)
+        self.main_layout.setSpacing(6)
+
+        self.label = QLabel(f"{self.name}:")
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setTextVisible(True)
+        self.progress.setValue(0)
+
+        self.cancel_button = QPushButton("X")
+        self.cancel_button.setFixedSize(20, 20)
+        self.cancel_button.clicked.connect(self.cancelTask)
+
+        self.main_layout.addWidget(self.label)
+        self.main_layout.addWidget(self.progress)
+        self.main_layout.addWidget(self.cancel_button)
+
+        self.task_runner = TaskRunner(new_thread, self.func, self.args, self.kwargs)
+        self.task_runner.task_completed.connect(self.onTaskCompleted)
+        self.task_runner.progress_signal.connect(self.set_value)
+
+        self.last_value = 0
+        self.current_value = 0
+        self._smooth_timer = QTimer(self)
+        self._smooth_timer.timeout.connect(self.updateProgressSmooth)
+        self._smooth_timer.start(100)
+
+        QTimer.singleShot(50, self.task_runner.start)
+
+    def set_value(self, value: int):
+        self.current_value = value
+
+    def updateProgressSmooth(self):
+        if not self.task_runner.isRunning():
+            return
+
+        if self.current_value == 0 and self.progress.value() < 10:
+            self.progress.setValue(self.progress.value() + 1)
+            time.sleep(0.1)
+        elif self.current_value >= 10:
+            self.smooth_value()
+
+    def smooth_value(self):
+        if abs(self.current_value - self.last_value) > 10:
+            self.progress.setValue(self.current_value)
+            self.last_value = self.current_value
+            return
+
+        for i in range(self.last_value + 1, self.current_value + 1):
+            self.progress.setValue(i)
+            self.last_value = i
+            time.sleep(0.01)
+
+    @Slot(bool, object)
+    def onTaskCompleted(self, success: bool, result):
+        self.task_runner.quit()
+        self.task_runner.wait()
+        self.progress.setValue(100)
+        self._smooth_timer.stop()
+        if not self.task_canceled:
+            if success:
+                self.task_successful = True
+        self.task_done.emit(self)
+
+    def cancelTask(self):
+        if self.task_runner.isRunning():
+            self.task_runner.stop()
+            self.task_runner.wait()
+        self.task_done.emit(self)
+        self.task_canceled = True
+        # self.deleteLater()
+
+
+class TaskBar(QWidget):
+    def __init__(self, parent=None, mode: str = "last"):
+        super().__init__(parent)
+        self.setFixedHeight(28)
+        self.setVisible(False)
+
+        self.mode = mode
+        self.tasks: list[TaskWidget] = []
+        self.current_display_task: TaskWidget | None = None
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 0, 10, 0)
+        layout.setSpacing(10)
+
+        self.label = QLabel("")
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(14)
+
+        layout.addWidget(self.label)
+        layout.addWidget(self.progress)
+
+        self.task_popup = TaskPopup(self)
+        self.task_popup.setObjectName("TaskPopup")
+
+    def mousePressEvent(self, event):
+        if self.task_popup.isVisible():
+            self.task_popup.hide()
+        else:
+            self.task_popup.reposition()
+            self.task_popup.show()
+
+    def add_task(self, name: str, func, args=(), kwargs=None) -> TaskWidget:
+        task = TaskWidget(name, func=func, args=args, kwargs=kwargs)
+        task.task_done.connect(lambda: self._remove_task(task))
+
+        self.tasks.append(task)
+        self.task_popup.add_task(task)
+        self._update_display()
+        self.setVisible(True)
+        return task
+
+    def _remove_task(self, task: TaskWidget):
+        if task in self.tasks:
+            self.tasks.remove(task)
+        if task == self.current_display_task:
+            self.current_display_task.progress.valueChanged.disconnect(self.progress.setValue)
+            self.current_display_task = None
+        self.task_popup.remove_task(task)
+        self._update_display()
+
+        if not self.tasks:
+            self.setVisible(False)
+            self.task_popup.hide()
+
+    def active_tasks(self):
+        return self.tasks# [t for t in self.tasks if not t.is_done]
+
+    def task_count(self) -> int:
+        return len(self.active_tasks())
+
+    def _update_display(self) -> None:
+        if not self.tasks:
+            self.setVisible(False)
+            return
+
+        task_to_show: TaskWidget | None = None
+        if self.mode == "first":
+            task_to_show = self.tasks[0]
+        elif self.mode == "last":
+            task_to_show = self.tasks[-1]
+        elif self.mode == "most_progressed":
+            task_to_show = max(self.tasks, key=lambda t: t.progress.value(), default=None)
+
+        if self.current_display_task is not None:
+            self.current_display_task.progress.valueChanged.disconnect(self.progress.setValue)
+        self.current_display_task = task_to_show
+        if task_to_show is not None:
+            self.label.setText(task_to_show.label.text())
+            task_to_show.progress.valueChanged.connect(self.progress.setValue)
+
+
+class TaskPopup(QWidget):
+    MAX_VISIBLE_TASKS = 3
+
+    def __init__(self, task_bar: QWidget):
+        super().__init__(task_bar)
+        self.task_bar = task_bar
+        self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        # self.setAttribute(Qt.WA_TranslucentBackground)
+
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(4, 4, 4, 4)
+
+        # Minimize/close button
+        self.header = QHBoxLayout()
+        self.header.setContentsMargins(0, 0, 0, 0)
+        self.header.setSpacing(0)
+
+        self.header.addStretch()
+        self.minimize_btn = QPushButton("✕")
+        self.minimize_btn.setFixedSize(18, 18)
+        self.minimize_btn.setStyleSheet("QPushButton { border: none; }")
+        self.minimize_btn.clicked.connect(self.hide)
+        self.header.addWidget(self.minimize_btn)
+        self.main_layout.addLayout(self.header)
+
+        # Scroll area
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        self.task_container = QWidget()
+        self.task_layout = QVBoxLayout(self.task_container)
+        self.task_layout.setContentsMargins(0, 0, 0, 0)
+        self.task_layout.setSpacing(2)
+
+        self.scroll_area.setWidget(self.task_container)
+        self.main_layout.addWidget(self.scroll_area)
+
+        self.setFixedWidth(300)
+
+    def add_task(self, task: TaskWidget):
+        self.task_layout.addWidget(task)
+        self._adjust_height_and_reposition()
+
+    def remove_task(self, task: TaskWidget):
+        for i in reversed(range(self.task_layout.count())):
+            item = self.task_layout.itemAt(i)
+            if item.widget() == task:
+                self.task_layout.removeWidget(task)
+                task.deleteLater()
+                break
+        self._adjust_height_and_reposition()
+
+    def _adjust_height_and_reposition(self):
+        count = self.task_layout.count()
+        if count == 0:
+            self.hide()
+            return
+
+        max_tasks = min(count, self.MAX_VISIBLE_TASKS)
+
+        height = 0
+        for i in range(max_tasks):
+            item = self.task_layout.itemAt(i)
+            if item:
+                height += item.widget().sizeHint().height()
+        height += self.task_layout.spacing() * (max_tasks - 1)
+
+        header_height = self.minimize_btn.sizeHint().height() + self.main_layout.spacing()
+        self.setFixedHeight(header_height + height + 8)  # some padding
+
+        if count > self.MAX_VISIBLE_TASKS:
+            self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        else:
+            self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        self.reposition()
+
+    def reposition(self):
+        """Move popup directly above the task bar"""
+        global_pos = self.task_bar.mapToGlobal(self.task_bar.rect().bottomLeft())
+        self.move(global_pos.x(), global_pos.y() - self.height() - 30)
 
 
 class ImageLabel(QLabel):
@@ -706,11 +1011,19 @@ class SearchWidget(QWidget):
         return self.search_bar.minimumSizeHint()
 
     def initUI(self):
+        search_bar_layout = QHBoxLayout()
+        search_bar_layout.setContentsMargins(0, 0, 0, 0)
         self.search_bar = QLineEdit(self)
         self.search_bar.setObjectName("search_widget_line_edit")
-        self.search_bar.setPlaceholderText("Search...")
+        self.search_bar.setPlaceholderText("[Enter] to search...")
+        self.search_bar.editingFinished.connect(self.on_text_finished)
         self.search_bar.textChanged.connect(self.on_text_changed)
         self.search_bar.returnPressed.connect(self.on_return_pressed)
+        search_bar_layout.addWidget(self.search_bar)
+        search_button = QPushButton("Search")
+        search_button.clicked.connect(self.on_text_finished)
+        # search_button.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum)
+        search_bar_layout.addWidget(search_button)
 
         self.results_list = QListWidget(self)
         self.results_list.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored)
@@ -718,14 +1031,22 @@ class SearchWidget(QWidget):
         self.results_list.itemActivated.connect(self.on_item_activated)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self.search_bar)
+        layout.addLayout(search_bar_layout)
         layout.addWidget(self.results_list)
         layout.setContentsMargins(0, 0, 0, 0)  # Set margins to zero
         layout.setSpacing(0)  # Set spacing to zero
 
-    def on_text_changed(self, text):
+    def on_text_changed(self) -> None:
         self.results_list.clear()
-        if text and self.search_bar.hasFocus():
+        self.results_list.hide()
+        self.adjustSize()
+        self.updateGeometry()  # Notify the layout system of potential size change
+        self.results_list.updateGeometry()  # Notify the layout system of potential size change
+
+    def on_text_finished(self):
+        text = self.search_bar.text()
+        self.results_list.clear()
+        if text:  #  and self.search_bar.hasFocus()
             # Assume get_search_results is a function that returns a list of tuples with the result text and icon path.
             results = self.search_results_func(text)
             print("Search Results: ", results)
@@ -1007,7 +1328,7 @@ class QScalingGraphicPixmapItem(QGraphicsPixmapItem, QObject):
         if self._is_hidden:
             return None
         self._is_hidden = True
-        self._pixmapLoaded.emit(QPixmap(self._width, self._height))
+        # self._pixmapLoaded.emit(QPixmap(self._width, self._height))
         return None
 
     def ensure_loaded(self) -> None:
@@ -1927,6 +2248,9 @@ class Settings:
             "provider": "ManhwaClan",
             "title": "Thanks for using ManhwaViewer!",
             "chapter": "1",
+            "libraries": '[]',  # json
+            "current_lib_idx": "-1",
+            "library_manager": "StdLibrary",
             "downscaling": "True",
             "upscaling": "False",
             "manual_content_width": "1200",
@@ -1938,16 +2262,17 @@ class Settings:
             "hide_scrollbar": "False",
             "stay_on_top": "False",
             "geometry": "100, 100, 640, 480",
-            "blacklisted_websites": "247manga.com, ww6.mangakakalot.tv, jimanga.com, mangapure.net, mangareader.mobi, onepiece.fandom.com, mangaowl.io",
-            "advanced_settings": '{"recent_titles": [], "themes": {"light": "light_light", "dark": "light_dark", "font": "Segoe UI"}, "settings_file_path": "", "settings_file_mode": "overwrite", "misc": {"auto_export": false, "num_workers": 10}}',
-            "provider_type": "direct",
+            "advanced_settings": '{"recent_titles": [], "themes": {"light": "light_light", "dark": "light_dark", "font": "Segoe UI"}, "settings_file_path": "", "settings_file_mode": "overwrite", "misc": {"auto_export": false, "quality_preset": "quality", "max_cached_chapters": -1}}',
             "chapter_rate": "1.0",
             "no_update_info": "True",
+            "not_recommened_update_info": "True",
             "update_info": "True",
             "last_scroll_positions": "0, 0",
             "scrolling_sensitivity": "4.0",
             "lazy_loading": "True",
-            "save_last_titles": "True"
+            "save_last_titles": "True",
+            "show_provider_logo": "True",
+            "show_tutorial": "True"
         }
         self.settings = self.default_settings.copy()
         if overwrite_settings:
@@ -1974,6 +2299,22 @@ class Settings:
     def list_to_str(self, lst: List[str]) -> str:
         return ', '.join(lst)
 
+    def ensure_keys(self, base: dict, modified: dict) -> dict:
+        """
+        Ensures all keys and nested keys in `base` exist in `modified`.
+        If a key is missing in `modified`, it's added from `base`.
+        """
+        result = modified.copy()  # Make a shallow copy to avoid modifying the original
+
+        for key, base_value in base.items():
+            if key not in result:
+                result[key] = base_value
+            else:
+                # If both are dicts, recurse
+                if isinstance(base_value, dict) and isinstance(result[key], dict):
+                    result[key] = self.ensure_keys(base_value, result[key])
+        return result
+
     def get(self, key: str):
         value = self.settings.get(key)
         if key in ["blacklisted_websites"]:
@@ -1984,14 +2325,17 @@ class Settings:
             return float(value)
         elif key in ["downscaling", "upscaling", "borderless", "hide_titlebar", "hover_effect_all",
                      "acrylic_menus", "acrylic_background", "hide_scrollbar", "stay_on_top", "no_update_info",
-                     "update_info", "lazy_loading", "save_last_titles"]:
+                     "update_info", "lazy_loading", "save_last_titles", "show_provider_logo", "show_tutorial"]:
             return self.boolean(value)
-        elif key in ["manual_content_width"]:
+        elif key in ["manual_content_width", "current_lib_idx", "max_cached_chapters"]:
             return int(value)
         elif key in ["geometry", "last_scroll_positions"]:
             return [int(x) for x in value.split(", ")]
-        elif key in ["advanced_settings"]:
-            return json.loads(value)
+        elif key in ["advanced_settings", "libraries"]:
+            mod_val = json.loads(value)
+            if not isinstance(mod_val, dict):
+                return mod_val
+            return self.ensure_keys(json.loads(self.default_settings.get(key)), mod_val)
         return value
 
     def set(self, key: str, value):
@@ -2003,18 +2347,22 @@ class Settings:
             value = str(float(value))
         elif key in ["downscaling", "upscaling", "borderless", "hide_titlebar", "hover_effect_all",
                      "acrylic_menus", "acrylic_background", "hide_scrollbar", "stay_on_top", "no_update_info",
-                     "update_info", "lazy_loading", "save_last_titles"]:
+                     "update_info", "lazy_loading", "save_last_titles", "show_provider_logo", "show_tutorial"]:
             value = str(value)
-        elif key in ["manual_content_width"]:
+        elif key in ["manual_content_width", "current_lib_idx", "max_cached_chapters"]:
             value = str(int(value))
         elif key in ["geometry", "last_scroll_positions"]:
             value = ', '.join([str(x) for x in value])
-        elif key in ["advanced_settings"]:
-            value = json.dumps(value)
+        elif key in ["advanced_settings", "libraries"]:
+            if isinstance(value, dict):
+                base = json.loads(self.default_settings.get(key))
+                value = json.dumps(self.ensure_keys(base, value))
+            else:
+                value = json.dumps(value)
         self.settings[key] = value
         self.update_data()
-        if self.get_advanced_settings()["misc"]["auto_export"]:
-            self.export_settings_func()
+        # if self.get_advanced_settings()["misc"]["auto_export"]:
+        #     self.export_settings_func()
 
     def get_provider(self):
         return self.get("provider")
@@ -2033,6 +2381,24 @@ class Settings:
 
     def set_chapter(self, value):
         self.set("chapter", value)
+
+    def get_libraries(self):
+        return self.get("libraries")
+
+    def set_libraries(self, value):
+        self.set("libraries", value)
+
+    def get_current_lib_idx(self):
+        return self.get("current_lib_idx")
+
+    def set_current_lib_idx(self, value):
+        self.set("current_lib_idx", value)
+
+    def get_library_manager(self):
+        return self.get("library_manager")
+
+    def set_library_manager(self, value):
+        self.set("library_manager", value)
 
     def get_downscaling(self):
         return self.get("downscaling")
@@ -2100,23 +2466,11 @@ class Settings:
     def set_geometry(self, value):
         self.set("geometry", value)
 
-    def get_blacklisted_websites(self):
-        return self.get("blacklisted_websites")
-
-    def set_blacklisted_websites(self, value):
-        self.set("blacklisted_websites", value)
-
     def get_advanced_settings(self):
         return self.get("advanced_settings")
 
     def set_advanced_settings(self, value):
         self.set("advanced_settings", value)
-
-    def get_provider_type(self):
-        return self.get("provider_type")
-
-    def set_provider_type(self, value):
-        self.set("provider_type", value)
 
     def get_chapter_rate(self):
         return self.get("chapter_rate")
@@ -2129,6 +2483,12 @@ class Settings:
 
     def set_no_update_info(self, value):
         self.set("no_update_info", value)
+
+    def get_not_recommened_update_info(self):
+        return self.get("not_recommened_update_info")
+
+    def set_not_recommened_update_info(self, value):
+        self.set("not_recommened_update_info", value)
 
     def get_update_info(self):
         return self.get("update_info")
@@ -2159,6 +2519,18 @@ class Settings:
 
     def set_save_last_titles(self, value):
         self.set("save_last_titles", value)
+
+    def get_show_provider_logo(self):
+        return self.get("show_provider_logo")
+
+    def set_show_provider_logo(self, value):
+        self.set("show_provider_logo", value)
+
+    def get_show_tutorial(self):
+        return self.get("show_tutorial")
+
+    def set_show_tutorial(self, value):
+        self.set("show_tutorial", value)
 
     def setup_database(self, settings):
         # Define tables and their columns
@@ -2205,7 +2577,7 @@ class AutoProviderManager:
                 for attribute_name in dir(module):
                     attribute = getattr(module, attribute_name)
                     if (isinstance(attribute, type) and issubclass(attribute, self.prov_plug) and attribute not in
-                            [self.prov_plug] + self.prov_sub_plugs):
+                            [self.prov_plug] + self.prov_sub_plugs and attribute.register_baseclass != attribute_name):
                         providers[attribute_name] = attribute
         return providers
 

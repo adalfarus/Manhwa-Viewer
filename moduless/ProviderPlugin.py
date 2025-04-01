@@ -1,7 +1,6 @@
 """TBA"""
-import errno
-import socket
-
+from aplustools.web.request import UnifiedRequestHandler
+from playwright.sync_api import sync_playwright, Error as PlaywrightError, Playwright, Browser
 from aplustools.package.timid import TimidTimer
 # from aplustools.web.utils import WebPage
 from traceback import format_exc
@@ -10,17 +9,19 @@ from urllib.parse import urljoin, urlparse
 from abc import ABCMeta, abstractmethod
 from bs4 import BeautifulSoup
 from queue import Queue
-import unicodedata
+import subprocess
 import threading
 import requests
 import urllib3
+import json
+import uuid
 import time
 import re
 import os
 
-import aiohttp
-import asyncio
-import aiofiles
+# import aiohttp
+# import asyncio
+# import aiofiles
 
 import collections.abc as _a
 import typing as _ty
@@ -65,59 +66,65 @@ def is_crawlable(useragent: str, url: str) -> bool:
         return False  # Return False if there was an error or the robots.txt file couldn't be retrieved
 
 
+def slugify(text: str) -> str:
+    text = text.lower()
+    text = re.sub(r'\s+', ' ', text)  # Collapse multiple spaces/tabs
+    text = re.sub(r'[^\w\s-]', '', text)   # Remove all non-url-safe characters except - and _
+    text = text.strip()
+    return "-".join(text.split())
+
+
+class CoreSaver(metaclass=ABCMeta):
+    curr_uuid: str
+
+    @classmethod
+    @abstractmethod
+    def save_chapter(cls, provider: "CoreProvider",chapter_number: str, chapter_title: str, chapter_img_folder: str,
+                     quality_present: _ty.Literal["best_quality", "quality", "size", "smallest_size"],
+                     progress_queue: Queue[int] | None = None) -> bool:
+        ...
+
+    @classmethod
+    @abstractmethod
+    def create_library(cls, library_path: str, name: str) -> None:
+        ...
+
+    @classmethod
+    @abstractmethod
+    def rename_library(cls, library_path: str, new_name: str) -> None:
+        ...
+
+    @classmethod
+    @abstractmethod
+    def get_library_name(cls, library_path: str) -> str:
+        ...
+
+    @classmethod
+    @abstractmethod
+    def is_compatible(cls, library_path: str) -> bool:
+        ...
+
+
 class CoreProvider(metaclass=ABCMeta):
-    def __init__(self, title: str, chapter: int, cache_folder: str, logo_folder: str) -> None:
+    needs_library_path: bool = False
+    register_baseclass: str = "CoreProvider"
+    saver: _ty.Type[CoreSaver] | None = None
+    # You can find the button popup def in main.py under the MainWindow cls, IT IS NOT THREAD SAFE, DO NOT CALL IN CHAPTER LOADING METHODS
+    button_popup: _ty.Callable[[str, str, str, _ty.Literal["Information", "Critical", "Question", "Warning", "NoIcon"], list[str], str, str | None], tuple[str | None, bool]]
+
+    def __init__(self, title: str, chapter: int, library_path: str, logo_folder: str) -> None:
         self._title: str = title
         self._chapter: float = chapter
-        self._cache_folder: str = cache_folder
+        self._library_path: str = library_path
+        self._current_cache_folder: str | None = None
         self._logo_folder: str = logo_folder
-        self.clipping_space: tuple[float, float] | None = None
+        self.clipping_space: tuple[int, int] | None = None
 
     def set_title(self, new_title):
         self._title = new_title
 
     def get_title(self):
         return self._title
-
-    def set_chapter(self, new_chapter):
-        self._chapter = new_chapter
-
-    def get_chapter(self):
-        return self._chapter
-
-    @abstractmethod
-    def get_logo_path(self) -> str:
-        ...
-
-    def increase_chapter(self, by: float) -> None:
-        self._chapter += by
-
-    @abstractmethod
-    def load_current_chapter(self, progress_queue: Queue[int] | None = None) -> bool:
-        ...
-
-    @abstractmethod
-    def get_search_results(self, search_text: str | None) -> bool | list[tuple[str, str]]:
-        ...
-
-    def is_working(self) -> bool:
-        return True
-
-    def can_work(self) -> bool:
-        return True
-
-
-class OnlineProvider(CoreProvider):
-    def __init__(self, title: str, chapter: int, cache_folder: str, logo_folder: str) -> None:
-        super().__init__(title, chapter, cache_folder, logo_folder)
-        self._chapter_str: str = ""
-        self._chap(chapter)
-        self._current_url: str = ""
-        self._image_queue: Queue = Queue()
-        self._downloaded_images_count: int = 0
-        self._total_images: int = 0
-        self._download_progress_queue: Queue = Queue()
-        self._process_progress_queue: Queue = Queue()
 
     def _chap(self, chapter: float | None = None) -> None:
         chap: float = chapter or self._chapter
@@ -133,11 +140,440 @@ class OnlineProvider(CoreProvider):
         self._chap()
         return self._chapter
 
+    def set_library_path(self, new_library_path: str) -> None:
+        self._library_path = new_library_path
+
+    def get_library_path(self) -> str:
+        return self._library_path
+
+    @abstractmethod
+    def get_logo_path(self) -> str:
+        ...
+
+    @abstractmethod
+    def get_icon_path(self) -> str:
+        ...
+
+    def increase_chapter(self, by: float) -> None:
+        self._chapter += by
+
+    def load_current_chapter(self, current_cache_folder: str, progress_queue: Queue[int] | None = None) -> bool:
+        self._current_cache_folder = current_cache_folder
+        ret_val = self._load_current_chapter(progress_queue=progress_queue)
+        self._current_cache_folder = None
+        return ret_val
+
+    @abstractmethod
+    def _load_current_chapter(self, progress_queue: Queue[int] | None = None) -> bool:
+        ...
+
+    @abstractmethod
+    def get_search_results(self, search_text: str | None) -> bool | list[tuple[str, str]]:
+        ...
+
+    def _download_logo_image(self, url_or_data: str, new_name: str, img_format: str, img_type: _ty.Literal["url", "base64"]):
+        image: OnlineImage = OnlineImage(url_or_data)
+        if img_type == "url":
+            image.download_image(self._logo_folder, url_or_data, new_name, img_format)
+        elif img_type == "base64":  # Moved data to the back to avoid using keyword arguments
+            image.base64(self._logo_folder, new_name, img_format, url_or_data)
+
+    def is_working(self) -> bool:
+        return True
+
+    def can_work(self) -> bool:
+        return True
+
+
+class ProviderImage:
+    def __init__(self, name: str, img_format: str, img_type: _ty.Literal["url", "base64"], url_or_data: str) -> None:
+        self._name: str = name
+        self._img_format: str = img_format
+        self._img_type: str = img_type
+        self._url_or_data: str = url_or_data
+
+    def get_file_name(self) -> str:
+        return f"{self._name}.{self._img_format}"
+
+    def get_path(self, from_folder: str) -> str:
+        return os.path.join(from_folder, self.get_file_name())
+
+    def save_to(self, folder_path: str) -> None:
+        if self._url_or_data == "":
+            return
+        try:
+            image: OnlineImage = OnlineImage(self._url_or_data)
+            if self._img_type == "url":
+                image.download_image(folder_path, self._url_or_data, self._name, self._img_format)
+            elif self._img_type == "base64":  # Moved data to the back to avoid using keyword arguments
+                image.base64(folder_path, self._name, self._img_format, self._url_or_data)
+        except Exception as e:
+            print(f"An error occurred {e}")
+            return
+
+    def save_to_empty(self, folder_path: str, discard_after: bool = False) -> None:
+        if os.path.isfile(self.get_path(folder_path)):
+            return
+        self.save_to(folder_path)
+        if discard_after:
+            self.discard_data()
+
+    def discard_data(self) -> None:
+        self._url_or_data = ""
+
+
+class OfflineProvider(CoreProvider, metaclass=ABCMeta):
+    needs_library_path: bool = True
+    register_baseclass: str = "OfflineProvider"
+    saver: _ty.Type[CoreSaver] | None = None
+
+    def get_logo_path(self) -> str:
+        return os.path.join(self._logo_folder, "empty.png")
+
+
+class LibrarySaver(CoreSaver, metaclass=ABCMeta):
+    @classmethod
+    def _should_work(cls, library_path: str) -> bool:
+        if not os.path.exists(library_path) or not os.path.isdir(library_path):
+            return False
+        return True
+
+    @classmethod
+    def _find_content_folder(cls, content_name: str, library_path: str) -> str:
+        # Find the content folder by title
+        if not cls._should_work(library_path):
+            return ""
+        for content_id in os.listdir(library_path):
+            folder = os.path.join(library_path, content_id)
+            data_path = os.path.join(folder, "data.json")
+            if not os.path.exists(data_path):
+                continue
+            try:
+                with open(data_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if data["metadata"].get("title", "").lower() == content_name.lower():
+                    return content_id
+            except Exception:
+                continue
+        return ""
+
+    @classmethod
+    def save_chapter(cls, provider: CoreProvider, chapter_number: str, chapter_title: str, chapter_img_folder: str,
+                     quality_present: _ty.Literal["best_quality", "quality", "size", "smallest_size"],
+                     progress_queue: Queue[int] | None = None) -> bool:
+        if not cls._should_work(provider.get_library_path()):
+            return False
+        cid = cls._find_content_folder(provider.get_title(), provider.get_library_path())
+        if cid != "":
+            cls.curr_uuid = cid
+            return True
+        content_id = str(uuid.uuid4())
+        content_path = os.path.join(provider.get_library_path(), content_id)
+        os.makedirs(content_path, exist_ok=True)
+
+        data = {
+            "metadata": {
+                "title": provider.get_title(),
+                "description": "",
+                "uuid": content_id,
+                "tags": [],
+                "cover_path": "./cover.png",
+                "large_cover_path": "./large_cover.png"
+            },
+            "chapters": []
+        }
+
+        with open(os.path.join(content_path, "data.json"), "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+
+        # Reset search cache
+        cls._reset_search_meta(provider.get_library_path())
+        cls._update_lib_meta(
+            provider.get_library_path(),
+            provider.get_title(),
+            content_id,
+            cls.__name__
+        )
+        cls.curr_uuid = content_id
+        return True
+
+    @classmethod
+    def create_library(cls, library_path: str, name: str) -> None:
+        if not cls._should_work(library_path):
+            return
+        os.makedirs(library_path, exist_ok=True)
+
+        # Create libmeta.json
+        libmeta_path = os.path.join(library_path, "libmeta.json")
+        if not os.path.exists(libmeta_path):
+            libmeta = {
+                "meta": {
+                    "name": name,
+                    "library_manager": cls.__name__
+                },
+                "content": {}
+            }
+            with open(libmeta_path, "w", encoding="utf-8") as f:
+                json.dump(libmeta, f, indent=4)
+
+        # Create empty searchmeta.json
+        searchmeta_path = os.path.join(library_path, "searchmeta.json")
+        if not os.path.exists(searchmeta_path):
+            with open(searchmeta_path, "w", encoding="utf-8") as f:
+                json.dump({}, f, indent=4)
+
+    @classmethod
+    def rename_library(cls, library_path: str, new_name: str) -> None:
+        if not cls._should_work(library_path):
+            return
+
+        libmeta_path = os.path.join(library_path, "libmeta.json")
+        if not os.path.exists(libmeta_path):
+            raise FileNotFoundError(f"libmeta.json not found in {library_path}")
+
+        with open(libmeta_path, "r", encoding="utf-8") as f:
+            libmeta = json.load(f)
+
+        libmeta["meta"]["name"] = new_name
+
+        with open(libmeta_path, "w", encoding="utf-8") as f:
+            json.dump(libmeta, f, indent=4)
+
+    @classmethod
+    def get_library_name(cls, library_path: str) -> str:
+        libmeta_path = os.path.join(library_path, "libmeta.json")
+        if not os.path.exists(libmeta_path):
+            raise FileNotFoundError(f"libmeta.json not found in {library_path}")
+
+        with open(libmeta_path, "r", encoding="utf-8") as f:
+            libmeta = json.load(f)
+
+        return libmeta.get("meta", {}).get("name", "")
+
+    @classmethod
+    def is_compatible(cls, library_path: str) -> bool:
+        libmeta_path = os.path.join(library_path, "libmeta.json")
+        if not os.path.exists(libmeta_path):
+            return True
+        try:
+            with open(libmeta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            return meta.get("meta", {}).get("library_manager") == cls.__name__
+        except Exception:
+            return False
+
+    @classmethod
+    def _reset_search_meta(cls, library_path: str) -> None:
+        with open(os.path.join(library_path, "searchmeta.json"), "w", encoding="utf-8") as f:
+            json.dump({}, f, indent=4)
+
+    @classmethod
+    def _update_lib_meta(cls, library_path: str, title: str, uuid_str: str, manager_name: str) -> None:
+        libmeta_path = os.path.join(library_path, "libmeta.json")
+
+        if os.path.exists(libmeta_path):
+            try:
+                with open(libmeta_path, "r", encoding="utf-8") as f:
+                    libmeta = json.load(f)
+            except Exception:
+                libmeta = {}
+        else:
+            libmeta = {}
+
+        # Set meta block
+        libmeta.setdefault("meta", {})
+        libmeta["meta"]["name"] = os.path.basename(library_path)
+        libmeta["meta"]["library_manager"] = manager_name
+
+        # Set content block
+        libmeta.setdefault("content", {})
+        libmeta["content"][uuid_str] = title
+
+        with open(libmeta_path, "w", encoding="utf-8") as f:
+            json.dump(libmeta, f, indent=4)
+
+
+class LibraryProvider(CoreProvider, metaclass=ABCMeta):
+    needs_library_path: bool = True
+    register_baseclass: str = "LibraryProvider"
+    saver: _ty.Type[CoreSaver] = LibrarySaver
+
+    def __init__(self, title: str, chapter: int, library_path: str, logo_folder: str, logo: ProviderImage,
+                 icon: ProviderImage | None) -> None:
+        super().__init__(title, chapter, library_path, logo_folder)
+        self._logo: ProviderImage = logo
+        self._logo.save_to_empty(self._logo_folder, discard_after=True)  # Not like we'll need it
+        self._icon: ProviderImage | None = icon
+        if self._icon is not None:
+            self._icon.save_to_empty(self._logo_folder, discard_after=True)  # Not like we'll need it
+        self._search_meta_path: str = os.path.join(self._library_path, "searchmeta.json")
+        self._lib_meta_path = os.path.join(self._library_path, "libmeta.json")
+        self._content_path = self._find_content_folder()
+
+    def set_library_path(self, new_library_path: str) -> None:
+        super().set_library_path(new_library_path)
+        self._content_path = self._find_content_folder()
+
+    def _find_content_folder(self) -> str:
+        # Find the content folder by title
+        if not os.path.exists(self._library_path) or not os.path.isdir(self._library_path):
+            return ""
+        for content_id in os.listdir(self._library_path):
+            folder = os.path.join(self._library_path, content_id)
+            data_path = os.path.join(folder, "data.json")
+            if not os.path.exists(data_path):
+                continue
+            try:
+                with open(data_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if data["metadata"].get("title", "").lower() == self._title.lower():
+                    return folder
+            except Exception:
+                continue
+        return ""
+
+    def get_logo_path(self) -> str:
+        return self._logo.get_path(self._logo_folder)
+
+    def get_icon_path(self) -> str:
+        if self._icon is None:
+            return ""
+        return self._icon.get_path(self._logo_folder)
+
+    def _resolve_titles_from_ids(self, ids: list[str]) -> list[tuple[str, str]]:
+        results = []
+        for content_id in ids:
+            data_path = os.path.join(self._library_path, content_id, "data.json")
+            if os.path.exists(data_path):
+                with open(data_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    title = data["metadata"].get("title", content_id)
+                    results.append((self.format_title(title), data_path))
+        return results
+
+    def format_title(self, title: str) -> str:
+        return ' '.join(word[0].upper() + word[1:] if word else '' for word in title.lower().split())
+
+    def get_search_results(self, search_text: str | None) -> bool | list[tuple[str, str]]:
+        if search_text is None:
+            return True
+
+        search_key = search_text.lower()
+        meta = self._load_search_meta()
+        if search_key in meta:
+            result_ids = meta[search_key]
+            return self._resolve_titles_from_ids(result_ids)
+
+        matched_ids = []
+        results = []
+
+        # Prefer searching libmeta.json if available
+        libmeta = self._load_lib_meta()
+        content_map = libmeta.get("content", {}) if libmeta else {}
+
+        for content_id, title in content_map.items():
+            if search_key in title.lower():
+                matched_ids.append(content_id)
+                data_path = os.path.join(self._library_path, content_id, "data.json")
+                results.append((self.format_title(title), data_path))
+
+        # Fallback to full scan if libmeta doesn't help
+        if not matched_ids:
+            for content_id in os.listdir(self._library_path):
+                path = os.path.join(self._library_path, content_id)
+                if not os.path.isdir(path):
+                    continue
+                data_path = os.path.join(self._library_path, content_id, "data.json")
+                if not os.path.exists(data_path):
+                    continue
+                try:
+                    with open(data_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        title = data["metadata"].get("title", content_id)
+                        if search_key in title.lower():  # Match against title
+                            matched_ids.append(content_id)
+                            results.append((self.format_title(title), data_path))
+                except Exception:
+                    continue
+
+        meta[search_key] = matched_ids
+        with open(self._search_meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=4)
+        return results
+
+    def _load_search_meta(self) -> dict:
+        if not os.path.exists(self._search_meta_path):
+            return {}
+        try:
+            with open(self._search_meta_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _load_lib_meta(self) -> dict:
+        if not os.path.exists(self._lib_meta_path):
+            return {}
+        try:
+            with open(self._lib_meta_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+
+class OnlineProvider(CoreProvider, metaclass=ABCMeta):
+    register_baseclass: str = "OnlineProvider"
+    saver: _ty.Type[CoreSaver] | None = None
+
+    # Shared downloader across all OnlineProvider instances
+    _shared_request_pool: UnifiedRequestHandler | None = None
+    _playwright: Playwright | None = None
+    _browser: Browser | None = None
+    _downloader_lock = threading.Lock()
+
+    def __init__(self, title: str, chapter: int, library_path: str, logo_folder: str, enable_js: bool = False) -> None:
+        super().__init__(title, chapter, library_path, logo_folder)
+        self._chapter_str: str = ""
+        self._chap(chapter)
+        self._current_url: str = ""
+        self._image_queue: Queue = Queue()
+        self._downloaded_images_count: int = 0
+        self._total_images: int = 0
+        self._download_progress_queue: Queue = Queue()
+        self._process_progress_queue: Queue = Queue()
+        self._js_enabled: bool = self._enable_js(enable_js)
+
+    def _enable_js(self, enable: bool) -> bool:
+        if not enable or (self._playwright is not None and self._browser is not None):
+            return enable
+        try:  # Try launching Playwright Chromium
+            # self._playwright = sync_playwright().start()
+            self._browser = self._playwright.chromium.launch(headless=True)
+        except PlaywrightError as e:
+            print("Playwright browser not found. Attempting to install Chromium...")
+            try:
+                subprocess.run(["playwright", "install", "chromium"], check=True)  # Try again after install
+                # self._playwright = sync_playwright().start()
+                self._browser = self._playwright.chromium.launch(headless=True)
+            except Exception as install_err:
+                print("Failed to install Playwright browser:")
+                print(format_exc())
+                self._playwright = self._browser = None
+                return False
+        except Exception:
+            print("Error enabling JavaScript:")
+            print(format_exc())
+            self._playwright = self._browser = None
+            return False
+        return True
+
+    def get_current_url(self) -> str:
+        return self._current_url
+
     def increase_chapter(self, by: float) -> None:
         self._chapter += by
         self._chap(self._chapter)
 
-    def load_current_chapter(self, progress_queue: Queue[int] | None = None) -> bool:
+    def _load_current_chapter(self, progress_queue: Queue[int] | None = None) -> bool:
         print("Updating current URL...")
         new_url: str | None = self._get_current_chapter_url()
 
@@ -149,7 +585,7 @@ class OnlineProvider(CoreProvider):
             print(f"Current URL set to: {self._current_url}")
 
             for progress_or_result in self._cache_current_chapter():
-                print("Handle cache result got: ", progress_or_result)
+                # print("Handle cache result got: ", progress_or_result)
                 if isinstance(progress_or_result, bool):  # Check if it's the final result
                     return progress_or_result
                 if progress_queue is not None:
@@ -160,59 +596,195 @@ class OnlineProvider(CoreProvider):
             progress_queue.put(0)
         return False
 
-    def _download_logo_image(self, url_or_data: str, new_name: str, img_format: str, img_type: _ty.Literal["url", "base64"]):
-        image: OnlineImage = OnlineImage(url_or_data)
-        if img_type == "url":
-            image.download_image(self._logo_folder, url_or_data, new_name, img_format)
-        elif img_type == "base64":  # Moved data to the back to avoid using keyword arguments
-            image.base64(self._logo_folder, new_name, img_format, url_or_data)
-
     @abstractmethod
     def _get_current_chapter_url(self) -> str | None:
         ...
 
-    async def _download_image_async(self, session: aiohttp.ClientSession, img_tag: dict, new_name: str) -> str:
-        url = urljoin(self._current_url, img_tag['src'])
-        async with session.get(url) as response:
-            if response.status == 200:
-                content = await response.read()
-                file_extension: str = img_tag['src'].split(".")[-1]
-                file_name: str = f"{new_name}.{file_extension}"
-                file_path = os.path.join(self._cache_folder, file_name)
-                async with aiofiles.open(file_path, 'wb') as f:
-                    await f.write(content)
+    # async def _download_image_async(self, session: aiohttp.ClientSession, img_tag: dict, new_name: str) -> str:
+    #     url = urljoin(self._current_url, img_tag['src'])
+    #     async with session.get(url) as response:
+    #         # print(f"Response {response.status} for {url}")
+    #         if response.status == 200:
+    #             content = await response.read()
+    #             file_extension: str = img_tag['src'].split(".")[-1]
+    #             file_name: str = f"{new_name}.{file_extension}"
+    #             file_path = os.path.join(self._current_cache_folder, file_name)
+    #             async with aiofiles.open(file_path, 'wb') as f:
+    #                 await f.write(content)
+    #             self._downloaded_images_count += 1
+    #             progress: int = int((self._downloaded_images_count / self._total_images) * 100)
+    #             self._download_progress_queue.put(progress)
+    #             return file_name
+    #     return img_tag['src'].split("/")[-1]
+    #
+    # async def _download_images_async(self, validated_tags: list[dict]):
+    #     count: int = 0
+    #     async with aiohttp.ClientSession() as session:
+    #         tasks: list[asyncio.Task] = []
+    #         for img_tag in validated_tags:
+    #             new_image_name = f"{str(count).zfill(3)}"
+    #             task = asyncio.create_task(
+    #                 self._download_image_async(session, img_tag, new_image_name))
+    #             tasks.append(task)
+    #             count += 1
+    #
+    #         results = await asyncio.gather(*tasks)
+    #         print(f"{len(validated_tags)} images downloaded!")
+    #         return results
+
+    def _download_using_js(self) -> bool:
+        print("[JS MODE] Using Playwright for image downloads.")
+        page = self._browser.new_page()
+        all_image_responses: dict[str, _ty.Any] = {}  # Cache all image responses
+
+        def _capture_all_images(response):
+            if response.request.resource_type == "image":
+                url = response.url.split("?")[0]
+                try:
+                    body = response.body()
+                    all_image_responses[url] = body
+                except Exception as e:
+                    print(f"Failed to get image from {url}: {e}")
+
+        page.on("response", _capture_all_images)
+
+        page.goto(self._current_url, wait_until="networkidle")  # Visit current url
+        page.evaluate("""() => {
+            return new Promise(resolve => {
+                let totalHeight = 0;
+                const distance = 100;
+                const timer = setInterval(() => {
+                    window.scrollBy(0, distance);
+                    totalHeight += distance;
+                    if (totalHeight >= document.body.scrollHeight) {
+                        clearInterval(timer);
+                        resolve();
+                    }
+                }, 100);
+            });
+        }""")  # Scroll through entire page to trigger all lazy loading using js
+        page.wait_for_timeout(3000)  # To ensure enough time has passed for all images to be loaded
+
+        soup = BeautifulSoup(page.content(), "html.parser")  # Extract the DOM to be analyzed by _be_picky
+        img_tags = self._be_picky(soup)
+        print(f"[JS MODE] Found {len(img_tags)} <img> tags after JS render.")
+        if not img_tags:
+            print("[JS MODE] No images found in _be_picky. Exiting early.")
+            return False
+        self._total_images = len(img_tags)
+        self._downloaded_images_count = 0
+        os.makedirs(self._current_cache_folder, exist_ok=True)
+
+        for count, tag in enumerate(img_tags):
+            src = tag.get("src")
+            if not src:
+                print(f"[JS MODE] Skipping img[{count}]: no src attribute.")
+                continue
+            url_base = src.split("?")[0]
+            content = all_image_responses.get(url_base)  # Extract only the responses we want from all responses
+            if content:
+                filename = f"{str(count).zfill(3)}.{url_base.split('.')[-1]}"
+                file_path = os.path.join(self._current_cache_folder, filename)
+                with open(file_path, "wb") as f:
+                    f.write(content)
                 self._downloaded_images_count += 1
-                progress: int = int((self._downloaded_images_count / self._total_images) * 100)
+                progress = int((self._downloaded_images_count / self._total_images) * 100)
                 self._download_progress_queue.put(progress)
-                return file_name
-        return img_tag['src'].split("/")[-1]
+                print(f"[JS MODE] Saved image[{count}] > {filename}")
+            else:
+                print(f"[JS MODE] Skipped image[{count}] - No matching response for {url_base}")
 
-    async def _download_images_async(self, validated_tags: list[dict]):
-        count: int = 0
-        async with aiohttp.ClientSession() as session:
-            tasks: list[asyncio.Task] = []
-            for img_tag in validated_tags:
-                new_image_name = f"{str(count).zfill(3)}"
-                task = asyncio.create_task(
-                    self._download_image_async(session, img_tag, new_image_name))
-                tasks.append(task)
-                count += 1
+        page.close()
+        print(f"[JS MODE] Captured {len(all_image_responses)} image responses from network.")
+        return self._downloaded_images_count > 0
 
-            results = await asyncio.gather(*tasks)
-            print(f"{len(validated_tags)} images downloaded!")
-            return results
+    # def _download_using_request(self) -> bool:
+    #     headers = {
+    #         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    #         "Accept-Language": "en-US,en;q=0.9",
+    #     }
+    #     response: requests.Response = requests.get(self._current_url, headers=headers)
+    #     response.raise_for_status()  # Because of some providers with invalid attributes we need to do this
+    #     content = re.sub(r'\s*src="data:[^"]+"', '', response.content.decode("UTF-8"))
+    #     soup: BeautifulSoup = BeautifulSoup(content, 'html.parser')
+    #     img_tags: list[dict] = self._be_picky(soup)
+    #     self._total_images = len(img_tags)
+    #     self._downloaded_images_count = 0
+    #     download_result = asyncio.run(self._download_images_async(img_tags))
+    #     print(f"Combined async download result: {download_result}")
+    #     return self._downloaded_images_count > 0
+
+    def _download_using_request(self) -> bool:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+
+        # Step 1: Fetch the page HTML
+        response: requests.Response = requests.get(self._current_url, headers=headers)
+        response.raise_for_status()
+
+        # Step 2: Parse and sanitize HTML (we need to do this because of some providers with invalid html-attributes)
+        content = re.sub(r'\s*src="data:[^"]+"', '', response.content.decode("UTF-8"))
+        soup: BeautifulSoup = BeautifulSoup(content, 'html.parser')
+
+        # Step 3: Let provider decide which <img> tags are relevant
+        img_tags: list[dict] = self._be_picky(soup)
+        self._total_images = len(img_tags)
+        self._downloaded_images_count = 0
+
+        if not img_tags:
+            print("[REQ MODE] No images found after filtering.")
+            return False
+
+        # Step 4: Prepare image URLs and file paths
+        image_urls: list[str] = []
+        file_paths: list[str] = []
+        os.makedirs(self._current_cache_folder, exist_ok=True)
+
+        for i, tag in enumerate(img_tags):
+            src = tag.get("src")
+            if not src:
+                print(f"[REQ MODE] Skipping image[{i}] — no src found.")
+                continue
+
+            full_url = urljoin(self._current_url, src)
+            image_urls.append(full_url)
+
+            ext = full_url.split(".")[-1].split("?")[0]
+            filename = f"{str(i).zfill(3)}.{ext}"
+            file_path = os.path.join(self._current_cache_folder, filename)
+            file_paths.append(file_path)
+
+        # Initialize pool once
+        with self._downloader_lock:
+            if self.__class__._shared_request_pool is None:
+                print("[REQ MODE] Initializing global UnifiedRequestHandler...")
+                self.__class__._shared_request_pool = UnifiedRequestHandler(5, 50, 5, 1.0)
+
+        # Step 5: Download the images using your UnifiedRequestHandler
+        print(f"[REQ MODE] Downloading {len(image_urls)} images...")
+        handler = self.__class__._shared_request_pool
+        result = handler.request_many(image_urls, async_mode=True).no_into().await_().no_into_results
+
+        # Step 6: Save images to disk
+        for i, (file_path, data) in enumerate(zip(file_paths, result)):
+            if data:
+                with open(file_path, 'wb') as f:
+                    f.write(data)
+                self._downloaded_images_count += 1
+                progress = int((self._downloaded_images_count / self._total_images) * 100)
+                self._download_progress_queue.put(progress)
+                print(f"[REQ MODE] Saved image[{i}] > {os.path.basename(file_path)}")
+            else:
+                print(f"[REQ MODE] Failed to download image[{i}]: {image_urls[i]}")
+        return self._downloaded_images_count > 0
 
     def _download_images(self) -> bool:
         try:
-            response: requests.Response = requests.get(self._current_url)
-            response.raise_for_status()
-            soup: BeautifulSoup = BeautifulSoup(response.text, 'html.parser')
-            img_tags: list[dict] = self._be_picky(soup)
-            self._total_images = len(img_tags)
-            self._downloaded_images_count = 0
-            download_result = asyncio.run(self._download_images_async(img_tags))
-            print(f"Combined async download result: {download_result}")
-            return True
+            if self._js_enabled:
+                return self._download_using_js()
+            return self._download_using_request()
         except Exception as e:
             print(f"An error occurred: {format_exc()}")
             return False
@@ -221,12 +793,12 @@ class OnlineProvider(CoreProvider):
     def _be_picky(self, soup: BeautifulSoup) -> list[dict]:
         ...
 
-    def _cache_current_chapter(self) -> _ty.Generator[int, _ty.Any, bool]:
+    def _cache_current_chapter(self) -> _ty.Generator[int | bool, _ty.Any, None]:
         timer = TimidTimer()
         if not self._current_url:
             print("URL not found.")
             yield 0
-            return False
+            yield False
 
         timer.start(1)
         download_result_queue: Queue = Queue()
@@ -241,38 +813,53 @@ class OnlineProvider(CoreProvider):
         while True:
             if not download_thread.is_alive() and self._download_progress_queue.empty():
                 break
-            if not self._download_progress_queue.empty():  # Handle download progress
+            while not self._download_progress_queue.empty():  # Handle download progress
                 new_download_progress = self._download_progress_queue.get()
                 progress_diff = new_download_progress - current_download_progress
                 combined_progress += progress_diff
                 current_download_progress = new_download_progress
-            yield combined_progress // 2
+                yield combined_progress // 2
             time.sleep(0.1)
+        print("Download thread done")
 
         download_result: bool = download_result_queue.get()
         print(f"Download Result: {download_result}, ({timer.end()})")
-        return download_result
+        yield download_result
+
+    def __del__(self):
+        with self._downloader_lock:
+            if self._browser is not None:
+                self._browser.close()
+                self._browser = None
+            # if self._playwright is not None:
+            #     self._playwright.stop()
+            #     self._playwright = None
+            if self._shared_request_pool is not None:
+                self._shared_request_pool.shutdown()
+                self._shared_request_pool = None
 
 
-class ManhwaLikeProvider(OnlineProvider):
-    def __init__(self, title: str, chapter: int, cache_folder: str, logo_folder: str, specific_provider_website: str,
-                 logo_name: str, logo_url_or_data: str, logo_img_format: str, logo_img_type: _ty.Literal["url", "base64"]) -> None:
-        super().__init__(title, chapter, cache_folder, logo_folder)
+class ManhwaLikeProvider(OnlineProvider, metaclass=ABCMeta):
+    register_baseclass: str = "ManhwaLikeProvider"
+    saver: _ty.Type[CoreSaver] | None = None
+
+    def __init__(self, title: str, chapter: int, library_path: str, logo_folder: str, specific_provider_website: str,
+                 logo: ProviderImage, icon: ProviderImage | None, enable_js: bool = False) -> None:
+        super().__init__(title, chapter, library_path, logo_folder, enable_js=enable_js)
         self._specific_provider_website: str = specific_provider_website
-        self._logo_path: str = os.path.join(logo_folder, f"{logo_name}.{logo_img_format}")
-        print(self._logo_path, f"Is file: {os.path.isfile(self._logo_path)}")
-        if os.path.isfile(self._logo_path):
-            return
-        try:
-            # Using base64 is better as it won't matter if the url is ever changed, otherwise pass the url and
-            # img_type="url"
-            self._download_logo_image(logo_url_or_data, logo_name, img_format=logo_img_format, img_type=logo_img_type)
-        except Exception as e:
-            print(f"An error occurred {e}")
-            return
+        self._logo: ProviderImage = logo
+        self._logo.save_to_empty(self._logo_folder, discard_after=True)  # Not like we'll need it
+        self._icon: ProviderImage | None = icon
+        if self._icon is not None:
+            self._icon.save_to_empty(self._logo_folder, discard_after=True)  # Not like we'll need it
 
     def get_logo_path(self) -> str:
-        return self._logo_path
+        return self._logo.get_path(self._logo_folder)
+
+    def get_icon_path(self) -> str:
+        if self._icon is None:
+            return ""
+        return self._icon.get_path(self._logo_folder)
 
     def _search_post(self, search_text: str) -> dict | None:
         headers = {
@@ -309,8 +896,11 @@ class ManhwaLikeProvider(OnlineProvider):
         base_url = self._specific_provider_website
         search_url = f"https://{base_url}?s={search_text}&post_type=wp-manga"
 
-        response = requests.get(search_url)
-        response.raise_for_status()
+        try:
+            response = requests.get(search_url)
+            response.raise_for_status()
+        except requests.RequestException:
+            return {"success": False, "data": [""]}
 
         soup = BeautifulSoup(response.content, 'html.parser')
         c_tabs_item_divs = soup.find_all('div', class_='c-tabs-item')  # There is only ever one of these
@@ -339,7 +929,10 @@ class ManhwaLikeProvider(OnlineProvider):
         response_data = self._search(self._title)
         if response_data is None:
             return None
-        url = response_data["data"][0]["url"] + f"chapter-{self._chapter_str}/"
+        if not response_data.get("success", True):
+            url = f"https://{self._specific_provider_website}/manga/{slugify(self._title)}/" + f"chapter-{self._chapter_str}/"
+        else:
+            url = response_data["data"][0]["url"].removesuffix("/") + f"/chapter-{self._chapter_str}/"
         if url:
             print("Found URL:" + url)  # Concatenate (add-->+) string, to avoid breaking timestamps
             return url
@@ -377,7 +970,11 @@ class ManhwaLikeProvider(OnlineProvider):
 
     def is_working(self) -> bool:
         try:
-            response = requests.get(f"https://{self._specific_provider_website}", timeout=0.1)
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+            response = requests.get(f"https://{self._specific_provider_website}", timeout=0.1, headers=headers)
             response.raise_for_status()
             return True
         except requests.ReadTimeout:
@@ -386,10 +983,16 @@ class ManhwaLikeProvider(OnlineProvider):
             return False  # Website was not able to be reached at all
         except requests.ConnectionError as e:
             if "[WinError 10013]" in repr(e):
-                print(f"Blocked by firewall or permissions (WinError 10013) for {self._specific_provider_website}")
+                print(f"{{IS WORKING}} Blocked by firewall or permissions (WinError 10013) for {self._specific_provider_website}")
                 return False
-            print("Is working check failed: ", format_exc())
+            elif "Max retries exceeded" in repr(e):
+                print(f"{self._specific_provider_website} seems to be offline, max retries exceeded")
+                return False
+            print(f"{{IS WORKING}} Check failed: ", format_exc())
             return False  # Catch-all for any other connection error
+        except requests.HTTPError as e:
+            print(f"{{IS WORKING}} Faulty response from provider {self._specific_provider_website}, {e}")
+            return False
         except requests.RequestException:
-            print("Is working check failed: ", format_exc())
+            print(f"{{IS WORKING}} Check failed: ", format_exc())
             return False  # Other errors mean it's likely down

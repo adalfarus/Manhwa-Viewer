@@ -4,8 +4,8 @@ import numpy as np
 import base64
 from io import BytesIO
 from typing import Optional, Tuple, Union
-import asyncio
-from aiohttp import ClientSession
+# import asyncio
+# from aiohttp import ClientSession
 from typing import Type, Union, Tuple, Optional, List
 from concurrent.futures import ThreadPoolExecutor
 import functools
@@ -38,21 +38,21 @@ class ImageManager:
         kwargs["base_location"] = kwargs.get("base_location") or self.base_location
         if self.use_async:
             kwargs["_use_async"] = True
-            asyncio.run(self._add_image_async(image_class, *args, **kwargs))
+            # asyncio.run(self._add_image_async(image_class, *args, **kwargs))
         else:
             kwargs["_use_async"] = False
             self.images.append(image_class(*args, **kwargs))
         return len(self.images) - 1
 
-    async def _add_image_async(self, image_class: Type[Union['OfflineImage', 'OnlineImage']], *args, **kwargs):
-        self.images.append(await self.create_async(image_class, *args, **kwargs))
+    # async def _add_image_async(self, image_class: Type[Union['OfflineImage', 'OnlineImage']], *args, **kwargs):
+    #     self.images.append(await self.create_async(image_class, *args, **kwargs))
 
-    @staticmethod
-    async def create_async(cls, *args, **kwargs):
-        # Asynchronously perform initialization tasks here
-        instance = cls(*args, **kwargs)
-        # Optionally perform more async operations on 'instance' if needed
-        return instance
+    # @staticmethod
+    # async def create_async(cls, *args, **kwargs):
+    #     # Asynchronously perform initialization tasks here
+    #     instance = cls(*args, **kwargs)
+    #     # Optionally perform more async operations on 'instance' if needed
+    #     return instance
 
     def add_images(self, images_info: List[Tuple[Type[Union['OfflineImage', 'OnlineImage']], tuple, dict]]):
         """
@@ -63,18 +63,18 @@ class ImageManager:
             argument dictionary
         """
         if self.use_async:
-            asyncio.run(self._add_images_async(images_info))
+            ...# asyncio.run(self._add_images_async(images_info))
         else:
             for image_class, args, kwargs in images_info:
                 kwargs["base_location"] = kwargs.get("base_location") or self.base_location
                 kwargs["_use_async"] = False
                 self.images.append(image_class(**kwargs))
 
-    async def _add_images_async(self, images_info):
-        tasks = [ImageClass(*args, **{**kwargs, "_use_async": True,
-                                      "base_location": kwargs.get("base_location") or self.base_location})
-                 for ImageClass, args, kwargs in images_info]
-        self.images.extend(await asyncio.gather(*tasks))
+    # async def _add_images_async(self, images_info):
+    #     tasks = [ImageClass(*args, **{**kwargs, "_use_async": True,
+    #                                   "base_location": kwargs.get("base_location") or self.base_location})
+    #              for ImageClass, args, kwargs in images_info]
+    #     # self.images.extend(await asyncio.gather(*tasks))
 
     def add_image_object(self, image_object: Union['OfflineImage', 'OnlineImage']) -> int:
         """Adds image objects."""
@@ -87,71 +87,71 @@ class ImageManager:
 
     def remove_image(self, index: int):
         if self.use_async:
-            asyncio.run(self._remove_image(index))
+            ...# asyncio.run(self._remove_image(index))
         else:
             del self.images[index]
 
-    async def _remove_image(self, index: int):
-        await asyncio.sleep(0)  # Yield control to the event loop
-        del self.images[index]
+    # async def _remove_image(self, index: int):
+    #     await asyncio.sleep(0)  # Yield control to the event loop
+    #     del self.images[index]
 
     def remove_images(self, indices_list: List[int]):
         if self.use_async:
-            asyncio.run(self._remove_images(indices_list))
+            ...#asyncio.run(self._remove_images(indices_list))
         else:
             for index in sorted(indices_list, reverse=True):
                 del self.images[index]
 
-    async def _remove_images(self, indices_list: List[int]):
-        tasks = [self._remove_image(index) for index in sorted(indices_list, reverse=True)]
-        await asyncio.gather(*tasks)
+    # async def _remove_images(self, indices_list: List[int]):
+    #     tasks = [self._remove_image(index) for index in sorted(indices_list, reverse=True)]
+    #     await asyncio.gather(*tasks)
 
     def remove_image_object(self, image_object: Union['OfflineImage', 'OnlineImage']):
         if self.use_async:
-            asyncio.run(self._remove_image_object(image_object))
+            ...#asyncio.run(self._remove_image_object(image_object))
         else:
             self.images.remove(image_object)
 
-    async def _remove_image_object(self, image_object: Union['OfflineImage', 'OnlineImage']):
-        await asyncio.sleep(0)  # Yield control to the event loop
-        self.images.remove(image_object)
+    # async def _remove_image_object(self, image_object: Union['OfflineImage', 'OnlineImage']):
+    #     await asyncio.sleep(0)  # Yield control to the event loop
+    #     self.images.remove(image_object)
 
     def remove_image_objects(self, image_objects: List[Union['OfflineImage', 'OnlineImage']]):
         if self.use_async:
-            asyncio.run(self._remove_image_objects(image_objects))
+            ...#asyncio.run(self._remove_image_objects(image_objects))
         else:
             for image_object in image_objects:
                 self.images.remove(image_object)
 
-    async def _remove_image_objects(self, image_objects: List[Union['OfflineImage', 'OnlineImage']]):
-        tasks = [self._remove_image_object(image_object) for image_object in image_objects]
-        await asyncio.gather(*tasks)
+    # async def _remove_image_objects(self, image_objects: List[Union['OfflineImage', 'OnlineImage']]):
+    #     tasks = [self._remove_image_object(image_object) for image_object in image_objects]
+    #     await asyncio.gather(*tasks)
 
     def execute_func(self, index: int, function, *args, **kwargs):
         if self.use_async:
-            asyncio.run(self._execute_func_async(index, function, *args, **kwargs))
+            ...#asyncio.run(self._execute_func_async(index, function, *args, **kwargs))
         else:
             getattr(self.images[index], function)(*args, **kwargs)
 
-    async def _execute_func_async(self, index: int, function, *args, **kwargs):
-        func = getattr(self.images[index], function)
-        if asyncio.iscoroutinefunction(func):
-            await func(*args, **kwargs)
-        else:
-            # Handle non-async functions, possibly with run_in_executor for CPU-bound methods
-            loop = asyncio.get_running_loop()
-            with ThreadPoolExecutor() as pool:
-                await self.run_in_executor(loop, pool, func, *args, **kwargs)
+    # async def _execute_func_async(self, index: int, function, *args, **kwargs):
+    #     func = getattr(self.images[index], function)
+    #     if asyncio.iscoroutinefunction(func):
+    #         await func(*args, **kwargs)
+    #     else:
+    #         # Handle non-async functions, possibly with run_in_executor for CPU-bound methods
+    #         loop = asyncio.get_running_loop()
+    #         with ThreadPoolExecutor() as pool:
+    #             await self.run_in_executor(loop, pool, func, *args, **kwargs)
 
-    @staticmethod
-    async def run_in_executor(loop, executor, func, *args, **kwargs):
-        if kwargs:
-            func = functools.partial(func, **kwargs)
-        return await loop.run_in_executor(executor, func, *args)
+    # @staticmethod
+    # async def run_in_executor(loop, executor, func, *args, **kwargs):
+    #     if kwargs:
+    #         func = functools.partial(func, **kwargs)
+    #     return await loop.run_in_executor(executor, func, *args)
 
     def execute_funcs(self, function_name: str, args_list: List[Tuple[int, list, dict]]):
         if self.use_async:
-            asyncio.run(self._execute_funcs_async(function_name, args_list))
+            ...#asyncio.run(self._execute_funcs_async(function_name, args_list))
         else:
             for index, args, kwargs in args_list:
                 try:
@@ -161,9 +161,9 @@ class ImageManager:
                 except AttributeError:
                     print(f"The function {function_name} does not exist for the image at index {index}")
 
-    async def _execute_funcs_async(self, function_name: str, args_list: List[Tuple[int, list, dict]]):
-        tasks = [self._execute_func_async(index, function_name, *args, **kwargs) for index, args, kwargs in args_list]
-        await asyncio.gather(*tasks)
+    # async def _execute_funcs_async(self, function_name: str, args_list: List[Tuple[int, list, dict]]):
+    #     tasks = [self._execute_func_async(index, function_name, *args, **kwargs) for index, args, kwargs in args_list]
+    #     await asyncio.gather(*tasks)
 
 
 class ResizeTypes:

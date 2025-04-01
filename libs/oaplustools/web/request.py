@@ -5,8 +5,8 @@
 # needing extra code.
 # -----------------------------------
 import requests
-import asyncio
-import aiohttp
+# import asyncio
+# import aiohttp
 import os
 
 
@@ -14,10 +14,10 @@ class UnifiedRequestHandler:
     def __init__(self):
         pass
 
-    async def _async_fetch(self, url):
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                return await response.text()
+    # async def _async_fetch(self, url):
+    #     async with aiohttp.ClientSession() as session:
+    #         async with session.get(url) as response:
+    #             return await response.text()
 
     def _sync_fetch(self, url):
         response = requests.get(url)
@@ -25,19 +25,19 @@ class UnifiedRequestHandler:
 
     def fetch(self, url, async_mode=False):
         if async_mode:
-            return asyncio.run(self._async_fetch(url))
+            ...# return asyncio.run(self._async_fetch(url))
         else:
             return self._sync_fetch(url)
 
 
 class UnifiedRequestHandlerAdvanced:
-    async def _async_request(self, method, url, return_type='text', **kwargs):
-        async with aiohttp.ClientSession() as session:
-            async with session.request(method, url, **kwargs) as response:
-                response.raise_for_status()
-                if return_type == 'binary':
-                    return await response.read()
-                return await response.text()
+    # async def _async_request(self, method, url, return_type='text', **kwargs):
+    #     async with aiohttp.ClientSession() as session:
+    #         async with session.request(method, url, **kwargs) as response:
+    #             response.raise_for_status()
+    #             if return_type == 'binary':
+    #                 return await response.read()
+    #             return await response.text()
 
     def _sync_request(self, method, url, return_type='text', **kwargs):
         response = requests.request(method, url, **kwargs)
@@ -48,7 +48,7 @@ class UnifiedRequestHandlerAdvanced:
 
     def request(self, method, url, async_mode=False, return_type='text', **kwargs):
         if async_mode:
-            return asyncio.run(self._async_request(method, url, return_type, **kwargs))
+            ...#return asyncio.run(self._async_request(method, url, return_type, **kwargs))
         else:
             return self._sync_request(method, url, return_type, **kwargs)
 

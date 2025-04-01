@@ -1,21 +1,26 @@
 # Copyright adalfarus 2025
 import config  # Configures python environment before anything else is done
+from playwright.sync_api import sync_playwright
 
+playwright_instance = sync_playwright().start()
 from PySide6.QtWidgets import (QApplication, QLabel, QVBoxLayout, QWidget, QMainWindow, QCheckBox, QHBoxLayout,
                                QScroller, QSpinBox, QPushButton, QGraphicsOpacityEffect, QScrollerProperties, QFrame,
                                QComboBox, QFormLayout, QLineEdit, QMessageBox, QScrollBar, QGraphicsProxyWidget,
-                               QCheckBox)
-from PySide6.QtGui import QDesktopServices, QPixmap, QIcon, QDoubleValidator, QFont, QImage
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QRect, QUrl, QSize
+                               QCheckBox, QToolButton, QFileDialog, QMenu, QInputDialog, QSizePolicy,
+                               QStyleOptionComboBox, QStyle, QDialog, QProgressBar, QDoubleSpinBox, QScrollArea,
+                               QTextEdit)
+from PySide6.QtGui import QDesktopServices, QPixmap, QIcon, QDoubleValidator, QFont, QImage, QPainter, QFontMetrics, \
+    QPaintEvent, QIntValidator
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QRect, QUrl, QSize, Signal, QPoint
 # from PySide6.QtMultimediaWidgets import QVideoWidget
 # from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtGui import QColor
 
 # from modules.AutoProviderPlugin import AutoProviderPlugin, AutoProviderBaseLike, AutoProviderBaseLike2
-from modules.ProviderPlugin import CoreProvider, OnlineProvider, ManhwaLikeProvider
+from modules.ProviderPlugin import CoreProvider
 from modules.Classes import (CustomProgressDialog, ImageLabel, SearchWidget, AdvancedQMessageBox,
                              CustomComboBox, Settings, TargetContainer, VerticalManagement, AutoProviderManager,
-                             AdvancedSettingsDialog)
+                             AdvancedSettingsDialog, TaskBar, TaskWidget)
 from modules.themes import Themes
 
 # Apt stuff ( update to newer version )
@@ -39,33 +44,661 @@ from typing import Literal
 import multiprocessing
 import stdlib_list
 from aplustools.io.qtquick import QQuickMessageBox
+
 multiprocessing.freeze_support()
 hiddenimports = list(stdlib_list.stdlib_list())
 
 # old_dir = os.getcwd()
 set_dir_to_ex()
-os.chdir(os.path.join(os.getcwd(), './_internal'))
+# os.chdir(os.path.join(os.getcwd(), './_internal'))
+
+
+class OldLibraryEdit(QComboBox):
+    add_library = Signal(str)
+    set_library_name = Signal(tuple)
+    remove_library = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        # self.setEditable(False)
+        # self.lineEdit().editingFinished.connect(self._add_library)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
+        self._libraries: list[tuple[str, str]] = []
+
+    def _add_library(self) -> None:
+        self.add_library_item("", self.lineEdit().text().split("|>\x00 ", maxsplit=1)[-1])
+        self.add_library.emit(self._libraries[self.currentIndex()][1])
+
+    def set_lib_name(self, library_path: str, new_name: str) -> None:
+        for index, (name, path) in enumerate(self._libraries):
+            if path == library_path:
+                self._libraries[index] = (new_name, path)
+                self.setItemText(index, f"{new_name}|>\x00 {path}")
+                self.setCurrentIndex(index)
+                return  # Exit after updating
+
+    def set_current_library_path(self, library_path: str) -> None:
+        for index, (name, path) in enumerate(self._libraries):
+            if path == library_path:
+                self.setCurrentIndex(index)
+                return
+
+        # If not found, add it with empty name
+        # self.add_library_item("", library_path)
+        # self.setCurrentIndex(len(self._libraries) - 1)
+
+    def add_library_item(self, library_name: str, library_path: str) -> None:
+        if any(p == library_path for _, p in self._libraries):
+            return  # Already exists
+        self._libraries.append((library_name, library_path))
+        self.addItem(f"{library_name}|>\x00 {library_path}")
+
+    def clear(self, /) -> None:
+        self._libraries.clear()
+        super().clear()
+
+    def _show_context_menu(self, pos: QPoint) -> None:
+        """Shows the menu with a right-click"""
+        if len(self._libraries) == 0:
+            return
+        menu = QMenu(self)
+        set_name_action = menu.addAction("Set name")
+        remove_action = menu.addAction("Remove")
+        action = menu.exec(self.mapToGlobal(pos))
+        if action == set_name_action:
+            self.set_library_name.emit(self._libraries[self.currentIndex()])
+        elif action == remove_action:
+            idx = self.currentIndex()
+            if 0 <= idx < len(self._libraries):
+                item = self._libraries.pop(idx)
+                self.removeItem(idx)
+                self.remove_library.emit(item[1])
+
+    def current_library(self) -> tuple[str, str]:
+        return self._libraries[self.currentIndex()]
+
+
+class LibraryEdit(QComboBox):
+    set_library_name = Signal(tuple)
+    remove_library = Signal(tuple)
+
+    def __init__(self, display_names: bool = True, show_path_end: bool = False, name_template: str = "{name}→", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
+        self._display_names: bool = display_names
+        self.show_path_end: bool = show_path_end
+        self._name_template: str = name_template
+        self._libraries: list[tuple[str, str]] = []
+
+    def set_new_name_template(self, template: str) -> None:
+        self._name_template = template
+
+    def set_lib_name(self, library_path: str, new_name: str) -> None:
+        for index, (name, path) in enumerate(self._libraries):
+            if path == library_path:
+                self._libraries[index] = (new_name, path)
+                self.setItemText(index, f"{self._name_template.format(name=new_name)}{path}")
+                self.setCurrentIndex(index)
+                return  # Exit after updating
+
+    def set_current_library_path(self, library_path: str) -> None:
+        for index, (name, path) in enumerate(self._libraries):
+            if path == library_path:
+                self.setCurrentIndex(index)
+                return
+
+    def add_library_item(self, library_name: str, library_path: str) -> None:
+        if any(p == library_path for _, p in self._libraries):
+            return  # Already exists
+        self._libraries.append((library_name, library_path))
+        if self._display_names:
+            self.addItem(f"{self._name_template.format(name=library_name)}{library_path}")
+        else:
+            self.addItem(library_path)
+        self.setCurrentIndex(len(self._libraries) - 1)
+
+    def clear(self, /) -> None:
+        self._libraries.clear()
+        super().clear()
+
+    def _show_context_menu(self, pos: QPoint) -> None:
+        """Shows the menu with a right-click"""
+        if len(self._libraries) == 0:
+            return
+        menu = QMenu(self)
+        set_name_action = menu.addAction("Set name")
+        remove_action = menu.addAction("Remove")
+        action = menu.exec(self.mapToGlobal(pos))
+        if action == set_name_action:
+            self.set_library_name.emit(self._libraries[self.currentIndex()])
+        elif action == remove_action:
+            idx = self.currentIndex()
+            if 0 <= idx < len(self._libraries):
+                item = self._libraries.pop(idx)
+                self.removeItem(idx)
+                self.remove_library.emit(item)
+
+    def current_library(self) -> tuple[str, str]:
+        if self.currentIndex() == -1:
+            return "", ""
+        return self._libraries[self.currentIndex()]
+
+    def paintEvent(self, event: QPaintEvent):
+        if self.isEditable() or not self.show_path_end:
+            super().paintEvent(event)
+            return
+
+        painter = QPainter(self)
+
+        # Prepare style option
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+
+        # Get the area where the text should be drawn
+        edit_rect = self.style().subControlRect(
+            QStyle.ComplexControl.CC_ComboBox,
+            option,
+            QStyle.SubControl.SC_ComboBoxEditField,
+            self
+        )
+
+        # Get elided text
+        metrics = QFontMetrics(self.font())
+        text = self.currentText()
+        elided = metrics.elidedText(text, Qt.TextElideMode.ElideMiddle, edit_rect.width())
+
+        # Draw full control first (background, arrow, etc.)
+        self.style().drawComplexControl(QStyle.ComplexControl.CC_ComboBox, option, painter, self)
+
+        # Draw elided text manually
+        painter.drawText(edit_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, elided)
+
+
+class TransferDialog(QDialog):
+    def __init__(self, parent: "MainWindow", current_chapter: float = 1.0, chapter_rate: float = 1.0):
+        super().__init__(parent)
+        self.setWindowTitle("Transfer chapter(s) from Provider to Library")
+        self.setFixedWidth(400)
+        self.setModal(True)
+
+        self.chapter_rate = chapter_rate
+        self.transfer_in_progress = False
+
+        self.main_layout = QVBoxLayout(self)
+
+        # Chapter range layout
+        range_layout = QHBoxLayout()
+        self.from_input = QDoubleSpinBox()
+        self.from_input.setRange(0, 9999)
+        self.from_input.setDecimals(2)
+        self.from_input.setSingleStep(chapter_rate)
+        self.from_input.setValue(current_chapter)
+
+        self.to_input = QDoubleSpinBox()
+        self.to_input.setRange(0, 9999)
+        self.to_input.setDecimals(2)
+        self.to_input.setSingleStep(chapter_rate)
+        self.to_input.setValue(current_chapter)
+
+        # Connect validation logic
+        self.from_input.valueChanged.connect(self.sync_to_min)
+        self.to_input.valueChanged.connect(self.sync_from_max)
+
+        range_layout.addWidget(QLabel("Chapter range:"))
+        range_layout.addWidget(self.from_input)
+        range_layout.addWidget(self.to_input)
+        self.main_layout.addLayout(range_layout)
+
+        # Return checkbox
+        self.return_checkbox = QCheckBox("Return to current chapter after finished")
+        self.return_to_chapter = False
+        self.return_checkbox.checkStateChanged.connect(
+            lambda: setattr(self, "return_to_chapter", self.return_checkbox.isChecked())
+        )
+        self.main_layout.addWidget(self.return_checkbox)
+
+        # Quality preset dropdown
+        quality_layout = QHBoxLayout()
+        quality_layout.addWidget(QLabel("Quality preset:"))
+        self.quality_combo = QComboBox()
+        self.quality_combo.addItems([
+            "Best Quality",
+            "Quality",
+            "Size",
+            "Smallest Size"
+        ])
+        quality_layout.addWidget(self.quality_combo)
+        self.main_layout.addLayout(quality_layout)
+
+        # Progress bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setTextVisible(False)
+
+        progress_container = QHBoxLayout()
+        progress_container.setContentsMargins(0, 0, 0, 0)
+        self.progress_label = QLabel("0 of 0 chapters transferred")
+        self.progress_label.setVisible(False)
+        progress_container.addWidget(self.progress_bar)
+        progress_container.addWidget(self.progress_label)
+
+        self.main_layout.addLayout(progress_container)
+
+        # Transfer button
+        self.transfer_button = QPushButton("Transfer")
+        self.transfer_button.clicked.connect(self.start_transfer)
+        self.main_layout.addWidget(self.transfer_button)
+
+    def sync_to_min(self, from_val: float):
+        to_val = self.to_input.value()
+        if from_val > to_val or not self._is_multiple(to_val - from_val):
+            steps = max(0, round((to_val - from_val) / self.chapter_rate))
+            new_to = from_val + steps * self.chapter_rate
+            self.to_input.blockSignals(True)
+            self.to_input.setValue(round(new_to, 2))
+            self.to_input.blockSignals(False)
+
+    def sync_from_max(self, to_val: float):
+        from_val = self.from_input.value()
+        if to_val < from_val or not self._is_multiple(to_val - from_val):
+            steps = max(0, round((to_val - from_val) / self.chapter_rate))
+            new_from = to_val - steps * self.chapter_rate
+            self.from_input.blockSignals(True)
+            self.from_input.setValue(round(new_from, 2))
+            self.from_input.blockSignals(False)
+
+    def _is_multiple(self, diff: float) -> bool:
+        return abs((diff / self.chapter_rate) - round(diff / self.chapter_rate)) < 1e-6
+
+    def start_transfer(self):
+        from_val = self.from_input.value()
+        to_val = self.to_input.value()
+
+        if self.parent().library_edit.current_library()[1] == "":
+            QMessageBox.warning(self, "No library selected", "Please select a library to enable \nthe transfer of chapters.")
+            return
+
+        self.transfer_in_progress = True
+
+        self.from_input.setEnabled(False)
+        self.to_input.setEnabled(False)
+        self.quality_combo.setEnabled(False)
+        self.transfer_button.setEnabled(False)
+
+        self.progress_bar.setVisible(True)
+        self.progress_label.setVisible(True)
+        self.progress_bar.setValue(0)
+
+        self.transfer_chapters(from_val, to_val)
+
+    def transfer_chapters(self, from_val: float, to_val: float):
+        chapter_rate = self.chapter_rate
+
+        self.quality_preset = self.quality_combo.currentText().lower().replace(" ", "_")
+
+        num_chapters = int(round((to_val - from_val) / chapter_rate)) + 1
+        self.total_chapters = num_chapters
+        self.current_index = 0
+        self.progress_label.setText(f"{self.current_index} of {self.total_chapters} chapters transferred")
+        self.chapter_list = [round(from_val + i * chapter_rate, 2) for i in range(num_chapters)]
+        self.first_chapter = True
+
+        # if float(self.parent().chapter_selector.text()) != from_val:
+        #     self.parent().reset_caches()
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.transfer_next_chapter)
+        self.timer.start(10)
+
+    def transfer_next_chapter(self):
+        if self.current_index >= len(self.chapter_list):
+            self.timer.stop()
+            self.finish_transfer()
+            return
+
+        chapter = self.chapter_list[self.current_index]
+        self.current_index += 1
+
+        parent = self.parent()
+        # if self.first_chapter:
+        #     self.first_chapter = False
+        # else:
+        #     parent.advance_cache()
+        if parent:
+            parent.chapter_selector.setText(str(chapter))
+            parent.set_chapter()
+            parent.ensure_loaded_chapter()
+            args = (
+                parent.provider,
+                chapter,
+                f"Chapter {chapter}",
+                parent.cache_manager.get_cache_folder(chapter),
+                self.quality_preset
+            )
+            kwargs = {}
+            progress_dialog = CustomProgressDialog(
+                parent=self,
+                window_title="Transferring ...",
+                window_icon="",
+                window_label="Doing a task...",
+                button_text="Cancel",
+                new_thread=True,
+                func=parent.saver.save_chapter,
+                args=args,
+                kwargs=kwargs)
+            progress_dialog.exec()
+
+            print("Transfer Task: ", progress_dialog.task_successful)
+            if not progress_dialog.task_successful:
+                QMessageBox.information(self, "Info", "Transferring of the chapter has failed!\nLook in the logs for more info.",
+                                        QMessageBox.StandardButton.Ok,
+                                        QMessageBox.StandardButton.Ok)
+
+        progress = int((self.current_index / self.total_chapters) * 100)
+        self.progress_bar.setValue(progress)
+        self.progress_label.setText(f"{self.current_index} of {self.total_chapters} chapters transferred")
+
+    def finish_transfer(self):
+        self.transfer_in_progress = False
+
+        self.accept()
+
+        QMessageBox.information(
+            self,
+            "Transfer Complete",
+            f"Transfer of chapter {self.chapter_list[0]:.2f}–{self.chapter_list[-1]:.2f} done.",
+            QMessageBox.Ok
+        )
+
+    def closeEvent(self, event):
+        if self.transfer_in_progress:
+            event.ignore()
+        else:
+            event.accept()
+
+
+class CacheManager:
+    def __init__(self, base_cache_folder: str) -> None:
+        self.base_cache_folder = base_cache_folder
+        os.makedirs(self.base_cache_folder, exist_ok=True)
+
+    def get_cache_folder(self, chapter: float) -> str:
+        folder: str = os.path.join(self.base_cache_folder, str(float(chapter)))
+        if not os.path.exists(folder):
+            os.makedirs(folder, exist_ok=True)
+        return folder
+
+    def is_cache_loaded(self, folder: str) -> bool:
+        return os.path.isdir(folder) and len(os.listdir(folder)) > 0
+
+    def clear_cache(self, folder: str) -> None:
+        self._clear_folder(folder)
+
+    def clear_all_caches(self) -> None:
+        for folder in os.listdir(self.base_cache_folder):
+            path = os.path.join(self.base_cache_folder, folder)
+            self._clear_folder(path)
+
+    def get_cached_chapters(self) -> list[float]:
+        chapters = []
+        for folder in os.listdir(self.base_cache_folder):
+            try:
+                chapters.append(float(folder))
+            except ValueError:
+                continue  # Ignore non-chapter folders
+        return sorted(chapters)
+
+    def ensure_less_than(self, n: int, current: int) -> None:
+        if n == -1:
+            return
+
+        chapters = self.get_cached_chapters()
+        if len(chapters) <= n:
+            return
+
+        # Sort chapters by distance from current
+        chapters.sort(key=lambda x: abs(x - current), reverse=True)
+
+        # Chapters to remove
+        excess = chapters[n:]
+
+        for chapter in excess:
+            folder = os.path.join(self.base_cache_folder, str(float(chapter)))
+            self._clear_folder(folder)
+
+    def _clear_folder(self, folder: str):
+        if os.path.exists(folder):
+            shutil.rmtree(folder)
+
+
+class WaitingDialog(QDialog):
+    def __init__(self, parent=None, message="Waiting for all tasks to finish..."):
+        super().__init__(parent)
+        self.setWindowTitle("Info")
+        self.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+        label = QLabel(message, self)
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label)
+
+        self.setFixedSize(300, 100)
+
+
+class TutorialPopup(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+        self.setWindowTitle("Tutorial")
+
+        layout = QVBoxLayout()
+        self.setLayout(layout)
+
+        self.text_edit = QTextEdit()
+        self.text_edit.setReadOnly(True)
+        self.text_edit.setHtml("""
+<h1>Welcome to the Tutorial</h1>
+<p>Scroll down to explore features and controls of the app.</p>
+<hr>
+
+<h2>📂 Basic Navigation</h2>
+<p>➡️ On the <b>right</b>, you'll find the <b>Side Menu</b>:</p>
+
+<ul>
+  <li><b>Comic Provider:</b> where your images come from
+    <ul>
+      <li>⚫ Grayed-out = temporarily unavailable (e.g., site is down)</li>
+      <li>❌ Not shown = unsupported (e.g., JS-loaded images)</li>
+      <li>📚 For library providers, make sure the matching library manager is selected</li>
+    </ul>
+  </li>
+  <li><b>Library Manager:</b> controls how chapters are stored</li>
+  <ul>
+    <li><b>Comic Book:</b> supports CBZ/CBR/CB7/CBT, writes CBZ. Resizes images based on quality level (100%, 75%, 50%, 25%)</li>
+    <li><b>DeepC:</b> saves images as videos using ffmpeg (needs ffmpeg installed + on PATH)</li>
+    <li><b>Std:</b> saves plain folders of images. Resizes images based on quality level (100%, 75%, 50%, 25%)</li>
+    <li><b>Tiff:</b> uses TIFF format. Size per chapter depends on compression:<br>
+      - Uncompressed ~300MB<br>
+      - LZW ~200MB<br>
+      - Deflate ~80MB<br>
+      - JPEG-compressed ~30MB</li>
+    <li><b>WebP:</b> stores .webp files, with quality settings: 50, 30, 10, 0 (100 = lossless)</li>
+  </ul>
+  <li><b>Chapter Settings:</b> title, number, and chapter increment rate</li>
+  <li><b>Library:</b> where files are saved. Click the tool icon to add new ones</li>
+</ul>
+
+<h2>➡️ Navigation Buttons:</h2>
+<ul>
+  <li>⬅️ Previous / ➡️ Next chapter</li>
+  <li>🔄 Re-download (clears cache & reloads from provider)</li>
+  <li>♻️ Re-load app (resets GUI & backend. Double-click = resets window size & pos)</li>
+</ul>
+
+<h2>🛠 UI Options</h2>
+<ul>
+  <li>🏷 Provider logo toggle (top-left)</li>
+  <li>🔍 Search All — triggers search across all searchable providers</li>
+  <li>✨ Hover Effects</li>
+  <li>🧱 Borderless Mode</li>
+  <li>💧 Acrylic Menus + Background</li>
+  <li>📐 Downscale / Upscale toggles</li>
+  <li>🔃 Lazy Loading (can improve large image scroll)</li>
+  <li>📏 Manual Width: base width of images</li>
+  <li>🚫 Hide Titlebar / Scrollbar</li>
+  <li>📌 Stay on Top (but popups may appear behind)</li>
+  <li>🎚 Sensitivity Slider (controls scroll intensity: 100%, 1000%, 10000%)</li>
+  <li>💾 Save Last Title</li>
+  <li>📤 Transfer Chapter(s)</li>
+  <li>⚙️ Advanced Settings</li>
+</ul>
+
+<h2>🔎 Search Bar</h2>
+<p>Located at the <b>top</b> of the window:</p>
+<ul>
+  <li>Search the active provider (if supported)</li>
+  <li>Press <b>Enter</b> or click the search icon</li>
+  <li>If the search bar has a <b>gold border</b>, Search All is active</li>
+</ul>
+
+<h2>⚙️ Advanced Settings Overview</h2>
+<ul>
+  <li>🕘 Recent Titles (if enabled)</li>
+  <li>🎨 Styling (themes & fonts)</li>
+  <li>🧳 Settings Export/Import (optional)</li>
+  <li>📦 Chapter Management (cache & transfer)</li>
+</ul>
+        """)
+        # content.setHtml("""
+        #     <h1>Welcome to the Tutorial</h1>
+        #     <p>Scroll to explore features:</p>
+        #     <hr>
+        #     <p><b>Basic navigation</b>:</p>
+        #     <p>- On the right you have the <b>Side-Menu</b>, here you can select the: </p>
+        #     <p>   > Comic provider (where the images come from)</p>
+        #     <p>      > If a provider currently does not work, it is grayed out (e.g. the website is down)</p>
+        #     <p>      > If a provider can't work, it is not included in the list (e.g. using javascript to load images)</p>
+        #     <p>      > If you select a library provider, you also need to use the corresponding library manager (otherwise it won't know what to search, ...)</p>
+        #     <p>   > Library manager (to manage the saved images)</p>
+        #     <p>      > If the currently select library isn't supported, it is deselected and you won't be able to select it again</p>
+        #     <p>      > There are several default library managers included: </p>
+        #     <p>         > Comic Book library (can read CBZ, CBR, CB7 and CBT, will write CBZ. Quality will resize the images to 100%, 75%, 50% and 25% respectively)</p>
+        #     <p>         > DeepC library (uses ffmpeg binaries to encode chapter images into videos to enable massive space savings while preserving quality, needs ffmpeg to be installed on your system and be accessible through your PATH)</p>
+        #     <p>         > Std library (will just save the plain images within a folder. Quality will resize the images to 100%, 75%, 50% and 25% respectively)</p>
+        #     <p>         > Tiff library (uses the tiff file format, tuned for maximum quality but large files. Quality will change compression modes to uncompressed ~300mb per chapter, lossless compressed 200mb per chapter, good compression 80mb per chapter, jpeg lossy compression 30mb per chapter)</p>
+        #     <p>         > WebP library (will save all images as .webp. Quality changes the quality attribute of the images, they are 50, 30, 10 and 0 with 100 being lossless and 0 being the worst)</p>
+        #     <p>   > Title and chapter</p>
+        #     <p>   > Chapter rate (how much the chapter is increased for every time you click next)</p>
+        #     <p>   > Library (where the images are saved, click the tool button next to it to add a library. A library may not be compatible with all library managers.)</p>
+        #     <p>   > Navigation buttons:</p>
+        #     <p>      > Previous and next</p>
+        #     <p>      > Re-download chapter (clears the caches and re gets the chapter from the provider)</p>
+        #     <p>      > Re-load the app (reloads all gui and backend components of the app, clicking it twice within one second will also reset window position and size)</p>
+        #     <p>   > Provider logo checkbox (this dis or enables the transparent provider logo in the top left)</p>
+        #     <p>   > Search all button (this will search all providers that are capable of searching and display the first two results for each. This effect is active for as long as the search bar remains circled with gold)</p>
+        #     <p>   > Hover effect all checkbox (adds a hover effect to all gui elements, sometimes bugged)</p>
+        #     <p>   > Borderless checkbox (removes border between image area and window edge)</p>
+        #     <p>   > Acrylic menus checkbox (makes all menus transparent)</p>
+        #     <p>   > Acrylic background checkbox (makes the app background transparent)</p>
+        #     <p>   > Downscale if larger than window checkbox (images that are larger than the window are downscaled to the window size)</p>
+        #     <p>   > Upscale if smaller than window checkbox (images that are smaller than the window are upscaled to the window size)</p>
+        #     <p>   > LL checkbox (enables or disabled lazy loading of images, may or may not make the experience better depending on the image dimensions)</p>
+        #     <p>   > Manual width spinbox (sets the base width of all images, that means if the images aren't modied by down- or upscaling, what width should they have)</p>
+        #     <p>   > Hide titlebar checkbox (hides the windows titlebar)</p>
+        #     <p>   > Hide scrollbar checkbox (hides the image areas scrollbars)</p>
+        #     <p>   > Stay on top checkbox (makes the window stay on top of all other windows, sadly popups will appear behind it)</p>
+        #     <p>   > Current sensitivity slider (the current sensitivity of the image area, normal scroll = 100%, scrollbar scroll = 1000%, scrollbar click = 10000%)</p>
+        #     <p>   > Save last titles checkbox (if the app should save the last titles + chapter + provider you've selected)</p>
+        #     <p>   > Transfer chapter(s) (opens chapter transfer dialog, from the provider to the library)</p>
+        #     <p>   > Adv settings (opens advanced settings dialog)</p>
+        #     <p>- On the top you have the <b>Search-Bar</b></p>
+        #     <p>   > Here you can search the provider, if it is supported</p>
+        #     <p>   > Press [ENTER] or the search button to initiate the search</p>
+        #     <p>   > If you've clicked the search all button, the search bar will have a golden border as long as you don't click away. This means it will search all providers.</p>
+        #     <p><b>Advanced settings</b> are ... into several sections:</p>
+        #     <p>- Recent titles (recent titles saved if the recent titles checkbox is checked)</p>
+        #     <p>- Styling (here you can select different themes and fonts)</p>
+        #     <p>- Settings file handling (not really necessary to use anymore, lets you export and import settings for the app)</p>
+        #     <p>- Chapter management settings (transfer and cache settings)</p>
+        #
+        #     <p><b>Basic navigation</b>:</p>
+        #     <p><b>25%</b>: Side menu usage and keyboard shortcuts.</p>
+        #     <p><b>50%</b>: Library settings and import/export.</p>
+        #     <p><b>75%</b>: Image formats and custom savers.</p>
+        #     <p><b>100%</b>: You're ready to go!</p>
+        # """)
+        self.text_edit.setMaximumHeight(600)
+
+        layout.addWidget(self.text_edit)
+
+        # Checkbox + OK button
+        self.checkbox = QCheckBox("Do not show again")
+        layout.addWidget(self.checkbox)
+
+        ok_button = QPushButton("Ok")
+        ok_button.clicked.connect(self.accept)
+        layout.addWidget(ok_button)
+
+        self.text_edit.verticalScrollBar().valueChanged.connect(self.on_scroll)
+        self.menu_opened = False
+
+    def on_scroll(self):
+        scrollbar = self.text_edit.verticalScrollBar()
+        max_scroll = scrollbar.maximum()
+        current = scrollbar.value()
+        progress = current / max_scroll if max_scroll > 0 else 0.0
+        self._on_tutorial_scroll(progress)
+
+    def _on_tutorial_scroll(self, progress: float) -> None:
+        parent = self.parent()
+
+        if (0.1 <= progress < 0.9 or progress == 1.0) and not getattr(self, "menu_opened", False):
+            self.menu_opened = True
+            parent.toggle_side_menu()
+        elif progress > 0.9 and progress != 1.0 and getattr(self, "menu_opened", False):
+            self.menu_opened = False
+            parent.toggle_side_menu()
+        if 0.8 <= progress < 0.99 and not getattr(self, "search_bar_shown", False):
+            self.search_bar_shown = True
+            parent.toggle_search_bar()
+        elif progress > 0.99 and getattr(self, "search_bar_shown", False):
+            self.search_bar_shown = False
+            parent.toggle_search_bar()
+        if progress >= 0.9 and not getattr(self, "search_highlight_triggered", False):
+            self.search_highlight_triggered = True
+            parent.search_all()
+        if progress == 1.0 and not getattr(self, "advanced", False):
+            self.advanced = True
+            parent.advanced_settings(blocking=False)
+            self.raise_()
+        # reset if scrolling back up
+        if progress < 0.9:
+            self.search_highlight_triggered = False
+        # print(f"Tutorial scroll progress: {progress:.2f}")
 
 
 class MainWindow(QMainWindow):
-    version, version_add = 172, ""
+    version, version_add = 174, "b5"
 
     def __init__(self, app):
         super().__init__()
         self.app = app
+        self.transferring = False
 
         self.data_folder = os.path.abspath('./data').strip("/")
-        self.cache_folder = os.path.abspath('./caches/cache').strip("/")
-        self.last_cache_folder = os.path.abspath('./caches/last_cache').strip("/")
-        self.next_cache_folder = os.path.abspath('./caches/next_cache').strip("/")
+        self.caches_folder = os.path.abspath('./caches').strip("/")
+        self.cache_manager = CacheManager(self.caches_folder)
         self.modules_folder = os.path.abspath('./modules').strip("/")
         self.extensions_folder = os.path.abspath('./extensions').strip("/")
 
-        for folder in (self.data_folder, self.cache_folder, self.last_cache_folder, self.next_cache_folder, self.modules_folder, self.extensions_folder):
+        for folder in (self.data_folder, self.modules_folder, self.extensions_folder):
             os.makedirs(folder, exist_ok=True)
 
         self.logger = monitor_stdout(f"{self.data_folder}/logs.txt")
-
         self.system = System()
 
         self.setWindowTitle(f"Super Manhwa Viewer {str(self.version) + self.version_add}")
@@ -89,6 +722,7 @@ class MainWindow(QMainWindow):
         # Advanced setup
         self.provider_dict = self.provider = None
         self.provider_combobox.currentIndexChanged.disconnect()
+        self.known_working_searchers = []
         self.reload_providers()
         self.switch_provider(self.settings.get_provider())
         self.provider_combobox.currentIndexChanged.connect(self.change_provider)
@@ -99,6 +733,7 @@ class MainWindow(QMainWindow):
         self.content_paths = self.get_content_paths()
         self.task_successful = False
         self.threading = False
+        self.gui_changing = False  # So we don't clear caches if the gui is changing
 
         self.reload_gui()
 
@@ -127,6 +762,7 @@ class MainWindow(QMainWindow):
 
         self.show()
         self.check_for_update()
+        self.show_tutorial()
         self.last_reload_ts = time.time()
 
     def button_popup(self, title: str, text: str, description: str,
@@ -156,6 +792,16 @@ class MainWindow(QMainWindow):
             if msg_box.clickedButton() == button_obj:
                 return button_text, checkbox_checked
         return None, checkbox_checked
+
+    def show_tutorial(self) -> None:
+        if not self.settings.get_show_tutorial():
+            return
+        popup = TutorialPopup(self)
+        result = popup.exec()
+
+        if popup.checkbox.isChecked():
+            print("Do not show again selected")
+            self.settings.set_show_tutorial(False)
 
     def check_for_update(self):
         try:
@@ -224,22 +870,29 @@ class MainWindow(QMainWindow):
             if checkbox_checked:
                 print("Do not show again selected")
                 self.settings.set_no_update_info(False)
-        elif self.settings.get_no_update_info() and not found_push:
+        elif self.settings.get_not_recommended_update_info() and not found_push:
             title = "Info"
             text = (f"New version available, but not recommended {found_version}.\n"
                     f"Checklist last updated {update_json['metadata']['lastUpdated'].replace('-', '.')}.")
             description = f"v{found_version}: {found_release.get('description')}"
             checkbox = "Do not show again"
-            retval, checkbox_checked = self.button_popup(title, text, description, "Information", ["Ok"], "Ok",
+            retval, checkbox_checked = self.button_popup(title, text, description, "Information", ["Ok", "Take me there"], "Ok",
                                                          checkbox)
+
+            if retval == "Take me there":
+                if found_release.get("updateUrl", "None").title() == "None":
+                    link = update_json["metadata"].get("sorryUrl", "https://example.com")
+                else:
+                    link = found_release.get("updateUrl")
+                QDesktopServices.openUrl(QUrl(link))
 
             if checkbox_checked:
                 print("Do not show again selected")
-                self.settings.set_no_update_info(False)
-        else:
-            self.button_popup("Update Info", "There was a logic-error when checking for updates.", "", "Information", ["Ok"], "Ok")
+                self.settings.set_not_recommended_update_info(False)
+        #else:
+        #    self.button_popup("Update Info", "There was a logic-error when checking for updates.", "", "Information", ["Ok"], "Ok")
 
-    def setup_gui(self):
+    def setup_gui(self) -> None:
         # Central Widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -266,6 +919,10 @@ class MainWindow(QMainWindow):
         # self.scrollarea.verticalScrollBar().setSingleStep(24)
         self.window_layout.addWidget(self.scrollarea)
 
+        # Taskbar
+        self.task_bar = TaskBar(self, "first")
+        self.window_layout.addWidget(self.task_bar)
+
         # Content widgets
         # content_widget = QWidget()
         # self.scrollarea.setWidget(content_widget)
@@ -287,6 +944,10 @@ class MainWindow(QMainWindow):
         opacity.setOpacity(0.5)  # Adjust the opacity level
         self.transparent_image.setGraphicsEffect(opacity)
         self.transparent_image.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+
+        # Menu Button
+        self.menu_button = QPushButton(QIcon(f"{self.data_folder}/empty.png"), "", self)  # .centralWidget()
+        self.menu_button.setFixedSize(40, 40)
 
         # Search Toggle Button
         self.search_bar_toggle_button = QPushButton("^", self)
@@ -327,6 +988,12 @@ class MainWindow(QMainWindow):
         provider_layout.addWidget(self.provider_combobox)
         side_menu_layout.addRow(provider_layout)
 
+        self.saver_combobox = CustomComboBox()
+        saver_layout = QHBoxLayout()
+        saver_layout.addWidget(QLabel("Library Manager:"))
+        saver_layout.addWidget(self.saver_combobox)
+        side_menu_layout.addRow(saver_layout)
+
         title_layout = QHBoxLayout()
         title_layout.addWidget(QLabel("Title:"))
         self.title_selector = QLineEdit()
@@ -342,12 +1009,30 @@ class MainWindow(QMainWindow):
         side_menu_layout.addRow(QLabel("Chapter Rate:"), self.chapter_rate_selector)
         self.chapter_selector.setValidator(QDoubleValidator(0.1, 2, 1))
 
-        self.provider_type_combobox = QComboBox(self)
-        self.provider_type_combobox.addItem("Indirect", 0)
-        self.provider_type_combobox.addItem("Direct", 1)
-        self.provider_type_combobox.setCurrentText("Direct")
-        self.provider_type_combobox.setEnabled(False)
-        side_menu_layout.addRow(self.provider_type_combobox, QLabel("Provider Type"))
+        # self.provider_type_combobox = QComboBox(self)
+        # self.provider_type_combobox.addItem("Indirect", 0)
+        # self.provider_type_combobox.addItem("Direct", 1)
+        # self.provider_type_combobox.setCurrentText("Direct")
+        # self.provider_type_combobox.setEnabled(False)
+        # side_menu_layout.addRow(self.provider_type_combobox, QLabel("Provider Type"))
+        self.library_edit: LibraryEdit = LibraryEdit()
+        library_select_button: QToolButton = QToolButton()
+        library_select_button.setText("...")
+        library_select_button.clicked.connect(self.select_folder)
+        library_layout = QHBoxLayout()
+        library_layout.setContentsMargins(0, 0, 0, 0)
+        label = QLabel("Library: ")
+        self.library_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        library_select_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        library_layout.addWidget(label)
+        library_layout.addWidget(self.library_edit)
+        library_layout.addWidget(library_select_button)
+
+        self.library_layout_frame = QFrame()
+        self.library_layout_frame.setFrameShape(QFrame.Shape.NoFrame)
+        self.library_layout_frame.setLayout(library_layout)
+
+        side_menu_layout.addRow(self.library_layout_frame)
 
         previous_chapter_button_side_menu = QPushButton("Previous")
         next_chapter_button_side_menu = QPushButton("Next")
@@ -361,12 +1046,16 @@ class MainWindow(QMainWindow):
         side_menu_buttons_layout.addWidget(self.reload_content_button)
         side_menu_layout.addRow(side_menu_buttons_layout)
 
-        [side_menu_layout.addRow(QWidget()) for _ in range(3)]
+        self.show_provider_logo_checkbox = QCheckBox("Provider Logo")
+        self.search_all_button = QPushButton("Search all")
+        another_layout = QHBoxLayout()
+        another_layout.setContentsMargins(0, 0, 0, 0)
+        another_layout.addWidget(self.show_provider_logo_checkbox)
+        another_layout.addWidget(self.search_all_button)
 
-        blacklist_button = QPushButton("Blacklist Current URL")
-        side_menu_layout.addRow(blacklist_button)
+        side_menu_layout.addRow(another_layout)
 
-        [side_menu_layout.addRow(QWidget()) for _ in range(3)]
+        [side_menu_layout.addRow(QWidget()) for _ in range(1)]
 
         self.hover_effect_all_checkbox = QCheckBox("Hover effect all")
         self.borderless_checkbox = QCheckBox("Borderless")
@@ -383,7 +1072,7 @@ class MainWindow(QMainWindow):
         side_menu_layout.addRow(hover_borderless_layout)
         side_menu_layout.addRow(acrylic_layout)
 
-        [side_menu_layout.addRow(QWidget()) for _ in range(3)]
+        [side_menu_layout.addRow(QWidget()) for _ in range(1)]
 
         # Scale checkboxes
         self.downscale_checkbox = QCheckBox("Downscale if larger than window")
@@ -399,12 +1088,15 @@ class MainWindow(QMainWindow):
         # SpinBox for manual width input and Apply Button
         self.manual_width_spinbox = QSpinBox()
         self.manual_width_spinbox.setRange(10, 2000)
-        side_menu_layout.addRow(self.manual_width_spinbox)
-
         apply_manual_width_button = QPushButton("Apply Width")
-        side_menu_layout.addRow(apply_manual_width_button)
+        manual_width_layout = QHBoxLayout()
+        manual_width_layout.setContentsMargins(0, 0, 0, 0)
+        manual_width_layout.addWidget(self.manual_width_spinbox)
+        manual_width_layout.addWidget(apply_manual_width_button)
 
-        [side_menu_layout.addRow(QWidget()) for _ in range(3)]
+        side_menu_layout.addRow(manual_width_layout)
+
+        [side_menu_layout.addRow(QWidget()) for _ in range(1)]
 
         # Window style checkboxes
         self.hide_title_bar_checkbox = QCheckBox("Hide titlebar")
@@ -417,7 +1109,7 @@ class MainWindow(QMainWindow):
         self.stay_on_top_checkbox = QCheckBox("Stay on top")
         side_menu_layout.addRow(self.stay_on_top_checkbox)
 
-        [side_menu_layout.addRow(QWidget()) for _ in range(3)]
+        [side_menu_layout.addRow(QWidget()) for _ in range(1)]
 
         self.scroll_sensitivity_scroll_bar = QScrollBar(Qt.Orientation.Horizontal)
         self.scroll_sensitivity_scroll_bar.setMinimum(1)  # QScrollBar uses integer values
@@ -430,17 +1122,14 @@ class MainWindow(QMainWindow):
         self.sensitivity_label = QLabel("Current Sensitivity: 1.0")
         side_menu_layout.addRow(self.sensitivity_label, self.scroll_sensitivity_scroll_bar)
 
-        [side_menu_layout.addRow(QWidget()) for _ in range(3)]
+        [side_menu_layout.addRow(QWidget()) for _ in range(1)]
 
         self.save_last_titles_checkbox = QCheckBox("Save last titles")
         side_menu_layout.addRow(self.save_last_titles_checkbox)
-        export_settings_button = QPushButton("Export Settings")
+        self.transfer_chapter_s_button = QPushButton("Transfer chapter(s)")  # "Export Settings"
+        # transfer_chapter_s_button.setEnabled(False)
         advanced_settings_button = QPushButton("Adv Settings")
-        side_menu_layout.addRow(export_settings_button, advanced_settings_button)
-
-        # Menu Button
-        self.menu_button = QPushButton(QIcon(f"{self.data_folder}/empty.png"), "", self.centralWidget())
-        self.menu_button.setFixedSize(40, 40)
+        side_menu_layout.addRow(self.transfer_chapter_s_button, advanced_settings_button)
 
         # Timer to regularly check for resizing needs
         timer = QTimer(self)
@@ -461,9 +1150,20 @@ class MainWindow(QMainWindow):
         self.hover_effect_all_checkbox.toggled.connect(self.reload_hover_effect_all_setting)
         self.save_last_titles_checkbox.toggled.connect(self.toggle_save_last_titles_checkbox)
         # Selectors
-        self.title_selector.textChanged.connect(self.set_title)
+        self.show_provider_logo_checkbox.checkStateChanged.connect(self.set_show_provider_logo)
+        # self.title_selector.textChanged.connect(self.set_title)
+        self.title_selector.editingFinished.connect(self.finish_editing_title)
         self.chapter_selector.textChanged.connect(self.set_chapter)
+        # self.library_line_edit.textChanged.connect(self.set_library_path)
+        self.library_edit.currentTextChanged.connect(self.change_library)
+        self.library_edit.remove_library.connect(lambda item: (
+            self.settings.set_libraries(self.settings.get_libraries().remove(item[1])),
+            self.settings.set_current_lib_idx(self.library_edit.currentIndex())
+        ))
+        self.library_edit.set_library_name.connect(self.set_library_name)
         self.chapter_rate_selector.textChanged.connect(self.set_chapter_rate)
+        # self.chapter_selector.textChanged.connect(lambda: self.reset_caches() if not self.gui_changing else "")  # So we don't have faulty caches
+        # self.chapter_rate_selector.textChanged.connect(lambda: self.reset_caches() if not self.gui_changing else "")  # So we don't have faulty caches
         # Menu components
         self.menu_button.clicked.connect(self.toggle_side_menu)  # Menu
         apply_manual_width_button.clicked.connect(self.apply_manual_content_width)  # Menu
@@ -474,16 +1174,17 @@ class MainWindow(QMainWindow):
         previous_chapter_button_side_menu.clicked.connect(self.previous_chapter)
         next_chapter_button_side_menu.clicked.connect(self.next_chapter)
         advanced_settings_button.clicked.connect(self.advanced_settings)  # Menu
-        export_settings_button.clicked.connect(self.export_settings)  # Menu
-        blacklist_button.clicked.connect(self.blacklist_current_url)  # Menu
+        self.transfer_chapter_s_button.clicked.connect(self.transfer_chapter_s)  # Menu
         # Rest
         self.provider_combobox.currentIndexChanged.connect(self.change_provider)  # Menu
+        self.saver_combobox.currentIndexChanged.connect(self.change_saver)  # Menu
         # self.provider_type_combobox.currentIndexChanged.connect(self.change_provider_type)
         self.side_menu_animation.valueChanged.connect(self.side_menu_animation_value_changed)  # Menu
         timer.timeout.connect(self.timer_tick)
         self.search_bar_animation.valueChanged.connect(self.search_bar_animation_value_changed)
         self.search_widget.selectedItem.connect(self.selected_chosen_result)
         self.scroll_sensitivity_scroll_bar.valueChanged.connect(self.update_sensitivity)
+        self.search_all_button.clicked.connect(self.search_all)
 
         # Style GUI components
         self.centralWidget().setStyleSheet("background: transparent;")
@@ -499,21 +1200,98 @@ class MainWindow(QMainWindow):
             self.reload_content_button.setIcon(QIcon(f"{self.data_folder}/reload_icon_light.png"))
 
         # Disable some components
-        blacklist_button.setEnabled(False)
+        # search_all_button.setEnabled(False)
         # self.save_last_titles_checkbox.setEnabled(False)
         # export_settings_button.setEnabled(False)
         # advanced_settings_button.setEnabled(False)
 
+    def handle_search_all(self, text: str) -> None:
+        provider_name, rest = text.split(": ", maxsplit=1)
+        title, chapter = rest.rsplit(", Ch ", maxsplit=1)
+        self.selected_chosen_item(f"{provider_name}\x00{title}\x00{chapter}")
+
+    def search_all(self) -> None:
+        is_visible = self.search_widget.y() >= 0
+        if not is_visible:
+            end_rect = QRect(0, self.search_bar_toggle_button.height() - 20, self.search_widget.width(),
+                             self.search_widget.height())
+            self.search_bar_animation.setStartValue(self.search_widget.geometry())
+            self.search_bar_animation.setEndValue(end_rect)
+            self.search_bar_animation.start()
+        old_func = self.search_widget.search_results_func
+
+        duped_provider_search_funcs = []
+        providers = []  # Never used, just so they don't go out of scope
+        def _create_lambda(provider_name: str, func, wanted_chapter: str, wanted_range: tuple[int, int]):
+            return lambda text: [(f"{provider_name}: {result[0]}, Ch {wanted_chapter}", result[1]) for result in func(text) if result[0] is not None][wanted_range[0]:wanted_range[1]]
+        def _try_result_wrapper(func, text) -> list[tuple[str, str]]:
+            try:
+                ret = func(text)
+            except Exception:
+                return []
+            return ret
+        for provider_name, provider_cls in self.known_working_searchers:
+            provider = provider_cls("", 0, "", self.data_folder)
+            duped_provider_search_funcs.append(_create_lambda(provider_name, provider.get_search_results, "1", (0, 2)))
+            providers.append(provider)
+
+        self.search_widget.search_results_func = lambda text: sum([_try_result_wrapper(func, text) for func in duped_provider_search_funcs], start=[])
+        self.search_widget.search_bar.setStyleSheet("border: 2px solid gold; border-radius: 4px;")
+        self.search_widget.selectedItem.disconnect()
+        self.search_widget.selectedItem.connect(self.handle_search_all)
+        self.search_widget.search_bar.setFocus()
+        while self.search_widget.isAncestorOf(QApplication.focusWidget()):
+            time.sleep(0.01)
+            QApplication.processEvents()
+        QTimer.singleShot(10, lambda: (
+            self.search_widget.search_bar.setStyleSheet(""),
+            setattr(self.search_widget, "search_results_func", old_func),
+            self.search_widget.on_text_changed(),
+            self.search_widget.selectedItem.disconnect(),
+            self.search_widget.selectedItem.connect(self.selected_chosen_result)
+        ))  # To allow for a search to happen
+
+    def transfer_chapter_s(self) -> None:
+        old_chapter = self.settings.get_chapter()
+        self.transferring = True
+        dialog = TransferDialog(self, self.settings.get_chapter(), self.settings.get_chapter_rate())
+        dialog.exec()
+        if dialog.return_to_chapter:
+            self.set_chapter()
+            # if abs(self.settings.get_chapter() - old_chapter) > 1:
+            self.chapter_selector.setText(str(old_chapter))
+            # self.reset_cache()
+            # self.reload_content()
+            self.ensure_loaded_chapter()
+            # else:
+            #     self.gui_changing = True
+            #     self.chapter_selector.setText(str(old_chapter))
+            #     self.gui_changing = False
+            #     [lambda: None, self.retract_cache, self.advance_cache][int((self.settings.get_chapter() - old_chapter) // self.settings.get_chapter_rate())]()
+            #     self.reload_content()
+            self.settings.set_chapter(old_chapter)
+        self.transferring = False
+
+    def select_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Select Folder")
+        if folder:
+            self.library_edit.add_library_item(os.path.basename(folder), folder)
+            self.settings.set_libraries(self.settings.get_libraries() + [folder])
+            self.settings.set_current_lib_idx(self.library_edit.currentIndex())
+
     def toggle_save_last_titles_checkbox(self):
         self.settings.set_save_last_titles(self.save_last_titles_checkbox.isChecked())
 
-    def advanced_settings(self):
+    def advanced_settings(self, blocking: bool = True):
         settings = self.settings.get_advanced_settings()
         default_settings = json.loads(self.settings.get_default_setting("advanced_settings"))
         self.settings.close()
         available_themes = tuple(key for key in Themes.__dict__.keys() if not (key.startswith("__") or key.endswith("__")))
-        dialog = AdvancedSettingsDialog(parent=self, current_settings=settings, default_settings=default_settings, master=self, available_themes=available_themes)
-        dialog.exec()
+        dialog = AdvancedSettingsDialog(parent=self, current_settings=settings, default_settings=default_settings, master=self, available_themes=available_themes, export_settings_func=self.export_settings)
+        if blocking:
+            dialog.exec()
+        else:
+            dialog.show()
         if not self.settings.is_open:
             self.settings.connect()
         if dialog.selected_settings is not None:
@@ -525,8 +1303,8 @@ class MainWindow(QMainWindow):
             self.update()
             self.repaint()
 
-            if settings["misc"]["num_workers"] != dialog.selected_settings["misc"]["num_workers"]:
-                self.switch_provider(self.provider_combobox.currentText())
+            # if settings["misc"]["num_workers"] != dialog.selected_settings["misc"]["num_workers"]:
+            #     self.switch_provider(self.provider_combobox.currentText())
             if (settings["themes"]["light"] != dialog.selected_settings["themes"]["light"]
                     or settings["themes"]["dark"] != dialog.selected_settings["themes"]["dark"]):
                 self.save_settings()
@@ -628,8 +1406,8 @@ class MainWindow(QMainWindow):
         cursor.close()
         connection.close()
 
-    def export_settings(self):
-        sett = self.settings.get_advanced_settings()
+    def export_settings(self, sett):
+        # sett = self.settings.get_advanced_settings()
         loc = sett.get("settings_file_path")
         mode = sett.get("settings_file_mode")
 
@@ -666,8 +1444,13 @@ class MainWindow(QMainWindow):
         if provider_name not in self.provider_dict:
             provider_name = f"{self.settings.get_default_setting('provider')}Provider"
         provider_cls = self.provider_dict[provider_name]
+        provider_cls._playwright = playwright_instance
 
-        self.provider = provider_cls(self.settings.get_title(), self.settings.get_chapter(), self.cache_folder, self.data_folder)
+        if self.settings.get_current_lib_idx() != -1:
+            current_library = self.settings.get_libraries()[self.settings.get_current_lib_idx()]
+        else:
+            current_library = ""
+        self.provider = provider_cls(self.settings.get_title(), self.settings.get_chapter(), current_library, self.data_folder)
         # self.provider.set_blacklisted_websites(self.settings.get_blacklisted_websites())
 
         if self.provider.get_search_results(None):
@@ -679,17 +1462,37 @@ class MainWindow(QMainWindow):
         new_pixmap = QPixmap(os.path.abspath(self.provider.get_logo_path()))
         self.transparent_image.setPixmap(new_pixmap)
         self.update_provider_logo()
+        self.update_provider_logo()
+        if self.provider.saver is not None:
+            self.transfer_chapter_s_button.setEnabled(False)
+            self.saver_combobox.setCurrentText(name)
+            for i in range(0, self.saver_combobox.count()):
+                item = self.saver_combobox.model().item(i)
+                if i == self.saver_combobox.currentIndex():
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEnabled)
+                    continue
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+        else:
+            self.transfer_chapter_s_button.setEnabled(True)
+            for i in range(0, self.saver_combobox.count()):
+                item = self.saver_combobox.model().item(i)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEnabled)
+        # self.library_layout_frame.setEnabled(self.provider.needs_library_path)
+
+    def format_title(self, title: str) -> str:
+        return ' '.join(word[0].upper() + word[1:] if word else '' for word in title.lower().split())
 
     def reload_window_title(self):
-        new_title = ' '.join(word[0].upper() + word[1:] if word else '' for word in self.provider.get_title().split())
+        new_title = self.format_title(self.provider.get_title())
         self.setWindowTitle(f'SMV {str(self.version) + self.version_add} | {new_title}, Chapter {self.provider.get_chapter()}')
 
     def get_content_paths(self, allowed_file_formats: tuple = None):
         if allowed_file_formats is None:
             allowed_file_formats = ('.png', ".jpg", ".jpeg", ".webp", ".http", '.mp4', '.txt')
-        content_files = sorted([f for f in os.listdir(self.cache_folder) if
+        cache_folder: str = self.cache_manager.get_cache_folder(self.provider.get_chapter())
+        content_files = sorted([f for f in os.listdir(cache_folder) if
                                 f.endswith(allowed_file_formats)])
-        content_paths = [os.path.join(self.cache_folder, f) for f in content_files]
+        content_paths = [os.path.join(cache_folder, f) for f in content_files]
         return content_paths
 
     # Helper Functions
@@ -857,10 +1660,34 @@ class MainWindow(QMainWindow):
         self.scrollarea.updateScrollBars()
         self.scrollarea._onScroll()
 
-    def set_title(self):
-        new_title = self.title_selector.text().strip()
+    def set_show_provider_logo(self) -> None:
+        self.settings.set_show_provider_logo(self.show_provider_logo_checkbox.isChecked())
+        self.update_provider_logo()
+
+    def wait_for_tasks(self) -> None:
+        if self.task_bar.task_count() != 0:
+            wait_dialog = WaitingDialog(self)
+            wait_dialog.show()
+            while self.task_bar.task_count() != 0:
+                QApplication.processEvents()
+                time.sleep(0.1)
+            wait_dialog.close()
+
+    def finish_editing_title(self) -> None:
+        new_title = self.title_selector.text().strip().lower()
+        if new_title == self.provider.get_title().lower():
+            return
+        if not self.gui_changing:
+            self.wait_for_tasks()
+            self.cache_manager.clear_all_caches()
+            self.reload_content()
         self.settings.set_title(new_title)
         self.provider.set_title(new_title)
+
+    # def set_title(self):
+    #     new_title = self.title_selector.text().strip().lower()
+    #     self.settings.set_title(new_title)
+    #     self.provider.set_title(new_title)
 
     def set_chapter(self):
         new_chapter = float("0" + self.chapter_selector.text())
@@ -868,18 +1695,30 @@ class MainWindow(QMainWindow):
             self.provider.set_chapter(new_chapter)
         else:
             self.provider.set_chapter(0)
+            # self.gui_changing = True
             self.chapter_selector.setText("0")
+            # self.gui_changing = False
+
+    def set_library_name(self, library: tuple[str, str]) -> None:
+        new_name, ok = QInputDialog.getText(self, "Set Library Name", "Enter new name:", text=library[0])
+        if ok and new_name:
+            self.savers_dict[self.saver_combobox.currentText()].rename_library(library[1], new_name)
+            self.library_edit.set_lib_name(library[1], new_name)
 
     def set_chapter_rate(self):
         new_chapter_rate = float("0" + self.chapter_rate_selector.text())
         if 0.1 <= new_chapter_rate <= 2.0:
             self.settings.set_chapter_rate(new_chapter_rate)
             # self.provider.set_chapter_rate(new_chapter_rate)
+            # self.gui_changing = True
             self.chapter_rate_selector.setText(str(new_chapter_rate))
+            # self.gui_changing = False
         else:
             self.settings.set_chapter_rate(0.1)
             # self.provider.set_chapter_rate(0.1)
+            # self.gui_changing = True
             self.chapter_rate_selector.setText("0.1")
+            # self.gui_changing = False
 
     def update_sensitivity(self, value):
         sensitivity = value / 10
@@ -891,36 +1730,57 @@ class MainWindow(QMainWindow):
         self.scrollarea.horizontalScrollBar().setSingleStep(value * 10)
         self.scrollarea.horizontalScrollBar().setPageStep(value * 100)
 
-    def selected_chosen_result(self, new_title, toggle_search_bar: bool = True):
+    def selected_chosen_result(self, title, toggle_search_bar: bool = True):
+        new_title = self.format_title(title)
         self.title_selector.setText(new_title)
-        self.title_selector.textChanged.emit(new_title)
+        self.finish_editing_title()
         self.chapter_selector.setText("1")
         self.chapter_selector.textChanged.emit("1")
         self.settings.set_chapter(1)
         self.reload_chapter()
         if toggle_search_bar:
             self.toggle_search_bar()
-        self.save_last_title(self.provider.get_title())
+        # self.save_last_title(self.provider.get_title())
 
-    def save_last_title(self, title):
+    def selected_chosen_item(self, new_item, toggle_search_bar: bool = True):
+        provider, title, chapter, *_ = new_item.split("\x00") + ["", ""]
+        if not _:
+            provider, title, chapter = title, provider, 0.0
+        else:
+            chapter = float(chapter)
+
+        new_title = self.format_title(title)
+        self.title_selector.setText(new_title)
+        self.finish_editing_title()
+        self.chapter_selector.setText(str(chapter))
+        self.chapter_selector.textChanged.emit(str(chapter))
+        self.settings.set_chapter(chapter)
+        if provider != "":
+            # self.switch_provider(provider)
+            self.provider_combobox.setCurrentText(provider)
+        self.reload_chapter()
+        if toggle_search_bar:
+            self.toggle_search_bar()
+        # self.save_last_title(self.provider.get_title())
+
+    def save_last_title(self, last_provider: str, last_title: str, last_chapter: str) -> None:
         if self.settings.get_save_last_titles():
             sett = self.settings.get_advanced_settings()
-            title = title.lower()
-            print(title)
-            if title in sett["recent_titles"]:
-                sett["recent_titles"].remove(title)
-            sett["recent_titles"].append(title)
+            last_title = last_title.lower()
+            last_chapter = str(last_chapter)
+            new_titles = []
+
+            for recent_title in sett["recent_titles"]:
+                provider, title, chapter, *_ = recent_title.split("\x00") + ["", ""]
+                if title.lower() == last_title and (provider == last_provider or chapter == last_chapter):
+                    continue
+                elif not _:
+                    new_titles.append(f"{title}\x00{provider}\x00{0}")  # As the title is the first split
+                    continue
+                new_titles.append(f"{provider}\x00{title}\x00{chapter}")
+            new_titles.append(f"{last_provider}\x00{last_title}\x00{last_chapter}")
+            sett["recent_titles"] = new_titles
             self.settings.set_advanced_settings(sett)
-
-    def change_provider_type(self):
-        return
-        # self.settings.set_provider_type(self.provider_type_combobox.currentText().lower())
-        # self.provider.set_provider_type(self.settings.get_provider_type())
-
-    def blacklist_current_url(self):
-        blk_urls = self.provider.get_blacklisted_websites() + [urlparse(self.provider.get_current_url()).netloc]
-        self.provider.set_blacklisted_websites(blk_urls)
-        self.settings.set_blacklisted_websites(self.provider.get_blacklisted_websites())
 
     def change_provider(self, *args, callback: bool = False):
         if not callback:
@@ -929,69 +1789,40 @@ class MainWindow(QMainWindow):
         if not callback:
             QTimer.singleShot(50, self.change_provider_callback)
 
-    def advance_cache(self) -> bool:
-        """Advances the cache by rotating the folders. Returns True if cache was already loaded, else False."""
-        if os.path.exists(self.last_cache_folder):  # Delete last_cache
-            shutil.rmtree(self.last_cache_folder)
-        if os.path.exists(self.cache_folder):  # Move cache -> last_cache
-            os.rename(self.cache_folder, self.last_cache_folder)
-        if os.path.exists(self.next_cache_folder):  # Move next_cache -> cache
-            os.rename(self.next_cache_folder, self.cache_folder)
+    def change_saver(self, *args):
+        self.saver = self.savers_dict[self.saver_combobox.currentText()]
+        self.settings.set_library_manager(self.saver_combobox.currentText())
+        if not self.saver.is_compatible(self.library_edit.current_library()[1]):
+            if self.settings.get_current_lib_idx() != self.library_edit.currentIndex():
+                self.library_edit.setCurrentIndex(self.settings.get_current_lib_idx())
+            else:
+                self.library_edit.setCurrentIndex(-1)
 
-        # Check if cache is already loaded (not empty)
-        files = os.listdir(self.cache_folder) if os.path.exists(self.cache_folder) else []
-        cache_was_loaded = len(files) > 0
-        os.makedirs(self.next_cache_folder, exist_ok=True)  # Create a new next_cache folder
-        return cache_was_loaded
-
-    def retract_cache(self) -> bool:
-        """Retracts the cache by rotating the folders in the opposite direction. Returns True if cache was already loaded, else False."""
-        if os.path.exists(self.next_cache_folder):  # Delete next_cache
-            shutil.rmtree(self.next_cache_folder)
-        if os.path.exists(self.cache_folder):  # Move cache -> next_cache
-            os.rename(self.cache_folder, self.next_cache_folder)
-        if os.path.exists(self.last_cache_folder):  # Move last_cache -> cache
-            os.rename(self.last_cache_folder, self.cache_folder)
-
-        # Check if cache is already loaded (not empty)
-        files = os.listdir(self.cache_folder) if os.path.exists(self.cache_folder) else []
-        cache_was_loaded = len(files) > 0
-        os.makedirs(self.last_cache_folder, exist_ok=True)  # Create a new last_cache folder
-        return cache_was_loaded
-
-    def reset_caches(self) -> None:
-        """Empties all cache folders without deleting them."""
-        self._clear_folder(self.cache_folder)
-        self._clear_folder(self.next_cache_folder)
-        self._clear_folder(self.last_cache_folder)
-
-    def reset_cache(self) -> None:
-        """Empties only the main cache folder."""
-        self._clear_folder(self.cache_folder)
-
-    def reset_next_cache(self) -> None:
-        """Empties only the next_cache folder."""
-        self._clear_folder(self.next_cache_folder)
-
-    def reset_last_cache(self) -> None:
-        """Empties only the last_cache folder."""
-        self._clear_folder(self.last_cache_folder)
-
-    def _clear_folder(self, folder):
-        """Helper function to clear a folder's contents while keeping it intact."""
-        if os.path.exists(folder):
-            for f in os.listdir(folder):
-                file_path = os.path.join(folder, f)
-                if os.path.isfile(file_path) or os.path.islink(file_path):
-                    os.remove(file_path)
-                elif os.path.isdir(file_path):
-                    shutil.rmtree(file_path)
+    def change_library(self, *args) -> None:
+        new_library_path: str = self.library_edit.current_library()[1]
+        if self.saver.is_compatible(new_library_path):
+            self.saver.create_library(*self.library_edit.current_library()[::-1])
+        else:
+            for name, saver in self.savers_dict.items():
+                if saver.is_compatible(new_library_path):
+                    self.saver_combobox.setCurrentText(name)
+                    break
+            # if self.settings.get_current_lib_idx() != self.library_edit.currentIndex():
+            #     self.library_edit.setCurrentIndex(self.settings.get_current_lib_idx())
+            # else:
+            #     self.library_edit.setCurrentIndex(-1)
+            # new_library_path = self.library_edit.current_library()[1]
+        self.settings.set_current_lib_idx(self.library_edit.currentIndex())
+        self.provider.set_library_path(new_library_path)
+        if hasattr(self, "previous_provider"):
+            self.previous_provider.set_library_path(new_library_path)
 
     def change_provider_callback(self):
         self.change_provider(callback=True)
         print(f"Switching provider {self.previous_provider} -> {self.provider}")
+        self.wait_for_tasks()
         if type(self.provider) is not type(self.previous_provider):
-            self.reset_caches()
+            self.cache_manager.clear_all_caches()
             self.reload_content()
 
     # Dynamic movement methods
@@ -1058,57 +1889,100 @@ class MainWindow(QMainWindow):
                 # print(type(widget).__name__) # Debug
 
     def update_provider_logo(self):
-        max_size = self.width() // 3
-        min_size = self.width() // 10
-        content_width = self.transparent_image.pixmap().width() if self.transparent_image.pixmap() else 0  # Adjust the size of the transparent image based on window width
-        if not min_size <= content_width <= max_size:  # If the current image width is outside the min and max size range, resize it
-            scaled_pixmap = QPixmap(os.path.abspath(self.provider.get_logo_path())).scaledToWidth(max_size, Qt.SmoothTransformation)
+        # Adjust the size of the transparent image based on window width
+        if not self.settings.get_show_provider_logo():
+            self.transparent_image.setVisible(False)
+        else:
+            self.transparent_image.setVisible(True)
+        pixmap = self.transparent_image.pixmap()
+        if not pixmap:
+            return
+        if pixmap.width() > pixmap.height():
+            smaller_size = "height"
+            size_to_scale_to = pixmap.width()
+        else:
+            smaller_size = "width"
+            size_to_scale_to = pixmap.height()
+        wanted_size = self.width() // 5
+        if size_to_scale_to != wanted_size:  # If the current image width is outside the min and max size range, resize it
+            if smaller_size == "width":
+                scaled_pixmap = QPixmap(os.path.abspath(self.provider.get_logo_path())).scaledToWidth(wanted_size, Qt.TransformationMode.SmoothTransformation)
+            else:
+                scaled_pixmap = QPixmap(os.path.abspath(self.provider.get_logo_path())).scaledToHeight(wanted_size, Qt.TransformationMode.SmoothTransformation)
+            if pixmap.width() > self.width() - 20:
+                scaled_pixmap = QPixmap(os.path.abspath(self.provider.get_logo_path())).scaledToWidth(self.width() - 20, Qt.TransformationMode.SmoothTransformation)
+            elif pixmap.height() > self.height() - 20:
+                scaled_pixmap = QPixmap(os.path.abspath(self.provider.get_logo_path())).scaledToHeight(self.height() - 20, Qt.TransformationMode.SmoothTransformation)
+            self.transparent_image.setFixedSize(scaled_pixmap.width() + 20, scaled_pixmap.height() + 20)
             self.transparent_image.setPixmap(scaled_pixmap)
-        self.transparent_image.setFixedSize(max_size, max_size)
 
     # Rest
     def reload_providers(self):
-        provider_manager = AutoProviderManager(self.extensions_folder, CoreProvider, [OnlineProvider, ManhwaLikeProvider])
+        provider_manager = AutoProviderManager(self.extensions_folder, CoreProvider, [])
         self.provider_dict = provider_manager.get_providers()
+        self.savers_dict = {}
+
+        vals = list(self.provider_dict.values())
+        if len(vals) > 0:
+            vals[0].button_popup = self.button_popup
 
         self.provider_combobox.clear()
+        self.saver_combobox.clear()
         last_working_provider = None
         saved_provider_working = False
         saved_provider = self.settings.get_provider()
+        saved_saver = self.settings.get_library_manager()
 
         i = 0
+        i2 = 0
         for provider_cls_name in self.provider_dict.keys():
-            provider = self.provider_dict[provider_cls_name]("", 0, self.cache_folder, self.data_folder)
+            provider = self.provider_dict[provider_cls_name]("", 0, "", self.data_folder)
 
             if not provider.can_work():
                 continue
 
-            icon_path = provider.get_logo_path()
-            image = QImage(os.path.abspath(icon_path))
+            logo_path = provider.get_logo_path()
+            icon_path = provider.get_icon_path()
+            image = QImage(os.path.abspath(logo_path))
             image_width, image_height = image.width(), image.height()
 
-            if provider.clipping_space:
+            if provider.clipping_space is not None:
                 start_x, start_y, end_x, end_y = provider.clipping_space
 
-                start_x = start_x if start_x != "max" else image_height
-                start_y = start_y if start_y != "max" else image_width
-                end_x = end_x if end_x != "max" else image_height
-                end_y = end_y if end_y != "max" else image_width
+                def _resolve(value: int) -> int:
+                    if value == -1:
+                        return image_height
+                    elif value == -2:
+                        return image_width
+                    return value
+
+                start_x = _resolve(start_x)
+                start_y = _resolve(start_y)
+                end_x = _resolve(end_x)
+                end_y = _resolve(end_y)
 
                 print(f"Cropping {image_height} x {image_width} for {provider_cls_name}")
                 cropped_image = image.copy(start_y, start_x, end_y, end_x)
             else:
-                print(f"Cube cropping {image_height} for {provider_cls_name}")
-                cropped_image = image.copy(0, 0, image_height, image_height)
+                cropped_image = QImage(os.path.abspath(icon_path))
 
             icon = QIcon(QPixmap.fromImage(cropped_image))
 
             # Add item to the dropdown
             provider_name = provider_cls_name.removesuffix("Provider")
             self.provider_combobox.addItem(icon, provider_name)
+
+            if provider.saver is not None:
+                self.savers_dict[provider_name] = provider.saver
+                self.saver_combobox.addItem(icon, provider_name)
+                i2 += 1
+
             if not provider.is_working():
                 item = self.provider_combobox.model().item(i)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+                if provider.saver is not None:
+                    item2 = self.saver_combobox.model().item(i2-1)
+                    item2.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
             else:
                 if provider_name == saved_provider:
                     saved_provider_working = True
@@ -1125,6 +1999,16 @@ class MainWindow(QMainWindow):
         else:
             print("No working provider")
             self.provider_combobox.setCurrentIndex(-1)  # No selection if no working provider found
+        self.saver_combobox.setCurrentText(saved_saver)
+        self.reload_searchers()
+
+    def reload_searchers(self) -> None:
+        for provider_cls_name, provider_cls in self.provider_dict.items():
+            provider_name = provider_cls_name.removesuffix("Provider")
+            provider = provider_cls("", 0, "", self.data_folder)
+            if not provider.get_search_results(None) or not provider.can_work() or not provider.is_working():
+                continue
+            self.known_working_searchers.append((provider_name, provider_cls))
 
     def save_settings(self):
         if hasattr(self, "settings") and self.settings.is_open:
@@ -1159,12 +2043,27 @@ class MainWindow(QMainWindow):
             )
             self.settings.set_scrolling_sensitivity(self.scroll_sensitivity_scroll_bar.value() / 10)
 
+    def get_library_name(self, lib_path: str) -> str:
+        for saver in self.savers_dict.values():
+            if saver.is_compatible(lib_path):
+                return saver.get_library_name(lib_path)
+        return "Unknown"
+
     def reload_gui(self, reload_geometry: bool = False, reload_position: bool = False):
         # self.provider_combobox.setCurrentText(self.settings.get_provider())
-        self.title_selector.setText(self.settings.get_title())
+        self.show_provider_logo_checkbox.setChecked(self.settings.get_show_provider_logo())
+        self.gui_changing = True
+        self.title_selector.setText(self.format_title(self.settings.get_title()))
+        self.gui_changing = False
         self.chapter_selector.setText(str(self.settings.get_chapter()))
         self.chapter_rate_selector.setText(str(self.settings.get_chapter_rate()))
         # self.provider_type_combobox.setCurrentText(self.settings.get_provider_type().title())
+        lib_idx = self.settings.get_current_lib_idx()
+        self.library_edit.clear()
+        for path in self.settings.get_libraries():
+            name = self.get_library_name(path)
+            self.library_edit.add_library_item(name, path)
+        self.library_edit.setCurrentIndex(lib_idx)
 
         # self.provider.set_blacklisted_websites(self.settings.get_blacklisted_websites())
 
@@ -1266,7 +2165,7 @@ class MainWindow(QMainWindow):
         self.scrollarea.updateScrollBars()
 
     # Chapter methods
-    def threading_wrapper(self, new_thread, blocking, func, *args, **kwargs):
+    def threading_wrapper(self, new_thread, blocking, func, args=(), kwargs=None):
         self.threading = True
         progress_dialog = CustomProgressDialog(
             self,
@@ -1274,8 +2173,8 @@ class MainWindow(QMainWindow):
             window_icon=f"{self.data_folder}/Untitled-1-noBackground.png",
             new_thread=new_thread,
             func=func,
-            *args,
-            **kwargs)
+            args=args,
+            kwargs=kwargs)
         if blocking:
             progress_dialog.exec()
         else:
@@ -1284,64 +2183,135 @@ class MainWindow(QMainWindow):
         self.task_successful = progress_dialog.task_successful
         self.threading = False
 
-    def chapter_loading_wrapper(self, func, fail_info, fail_text):
-        self.threading_wrapper(True, True, func)
+    def chapter_loading_wrapper(self, func, cache_folder, fail_info, fail_text):
+        self.threading_wrapper(True, True, func, args=(cache_folder,))
 
         if self.task_successful:
             self.reload_window_title()
             self.settings.set_chapter(self.provider.get_chapter())
             self.task_successful = False
-            self.save_last_title(self.provider.get_title())
         else:
-            self.provider.set_chapter(self.settings.get_chapter())
-            self.provider.load_current_chapter()
+            # self.provider.set_chapter(self.settings.get_chapter())
+            # self.provider.load_current_chapter()
+            # if not 1:
+            #     new_chapter = self.provider.get_chapter()
+            #     self.gui_changing = True
+            #     self.chapter_selector.setText(str(self.settings.get_chapter()))
+            #     self.gui_changing = False
+            #     self.set_chapter()
+            #     if abs(new_chapter - self.settings.get_chapter()) > 1:
+            #         self.reload_chapter()
+            #     else:
+            #         [lambda: None, self.retract_cache, self.advance_cache][int((new_chapter - self.settings.get_chapter()) // self.settings.get_chapter_rate())]()
+            # else:
+            self.reload_window_title()
+            self.settings.set_chapter(self.provider.get_chapter())
             QMessageBox.information(self, fail_info, fail_text,
                                     QMessageBox.StandardButton.Ok,
                                     QMessageBox.StandardButton.Ok)
+        # self.gui_changing = True
         self.chapter_selector.setText(str(self.settings.get_chapter()))
+        # self.gui_changing = False
         print("Reloading images ...")
         self.scrollarea.verticalScrollBar().setValue(0)
         self.scrollarea.horizontalScrollBar().setValue((self.scrollarea.width() // 2))
         self.reload_content()
+        self.save_last_title(self.provider.__class__.__name__.removesuffix("Provider"), self.provider.get_title(), self.settings.get_chapter())
+        if self.settings.get_advanced_settings().get("misc", {}).get("auto_export", False):
+            if self.library_edit.current_library()[1] == "":
+                QMessageBox.warning(self, "No library selected", "Please select a library to enable \nthe transfer of chapters.")
+                return
+            elif self.provider.saver is not None:
+                return  # So we don't save the same chapter over and over, destroying it's quality
+            elif self.transferring:
+                return
+            chapter = self.settings.get_chapter()
+
+            args = (
+                self.provider,
+                chapter,
+                f"Chapter {chapter}",
+                self.cache_manager.get_cache_folder(chapter),
+                self.settings.get_advanced_settings()["misc"]["quality_preset"]
+            )
+            kwargs = {}
+            task = self.task_bar.add_task(name=f"Transferring Ch {chapter}", func=self.saver.save_chapter, args=args, kwargs=kwargs)
+            task.task_done.connect(lambda t: (
+                print("Transfer Task: ", t.task_successful),
+                QMessageBox.information(self, "Info",
+                                        "Transferring of the chapter has failed!\nLook in the logs for more info.",
+                                        QMessageBox.StandardButton.Ok,
+                                        QMessageBox.StandardButton.Ok) if not t.task_successful else None
+            ))
 
     def next_chapter(self) -> None:
         self.provider.increase_chapter(self.settings.get_chapter_rate())
-        is_already_loaded: bool = self.advance_cache()
-        if not is_already_loaded:
-            self.chapter_loading_wrapper(self.provider.load_current_chapter, "Info | Loading of chapter has failed!",
-                                         "The loading of the next chapter has failed.\nLook in the logs for more info.")
+        cache_folder: str = self.cache_manager.get_cache_folder(self.provider.get_chapter())
+        if not self.cache_manager.is_cache_loaded(cache_folder):
+            self.chapter_loading_wrapper(self.provider.load_current_chapter, cache_folder, "Info | Loading of the chapter has failed!",
+                                         "Maybe this chapter doesn't exist?\nIf that isn't the case, look in the logs for more info.")
         else:
             self.reload_window_title()
             self.settings.set_chapter(self.provider.get_chapter())
             self.task_successful = False
-            self.save_last_title(self.provider.get_title())
+            # self.gui_changing = True
             self.chapter_selector.setText(str(self.settings.get_chapter()))
+            # self.gui_changing = False
+            self.save_last_title(self.provider.__class__.__name__.removesuffix("Provider"), self.provider.get_title(), self.settings.get_chapter())
             print("Reloading images ...")
             self.scrollarea.verticalScrollBar().setValue(0)
             self.scrollarea.horizontalScrollBar().setValue((self.scrollarea.width() // 2))
             self.reload_content()
+        self.cache_manager.ensure_less_than(self.settings.get_advanced_settings().get("misc", {}).get("max_cached_chapters", -1), self.provider.get_chapter())
 
     def previous_chapter(self) -> None:
+        if self.provider.get_chapter() - self.settings.get_chapter_rate() < 0:
+            return
         self.provider.increase_chapter(-self.settings.get_chapter_rate())
-        is_already_loaded: bool = self.retract_cache()
-        if not is_already_loaded:
-            self.chapter_loading_wrapper(self.provider.load_current_chapter, "Info | Loading of chapter has failed!",
-                                         "The loading of the previous chapter has failed.\nLook in the logs for more info.")
+        cache_folder: str = self.cache_manager.get_cache_folder(self.provider.get_chapter())
+        if not self.cache_manager.is_cache_loaded(cache_folder):
+            self.chapter_loading_wrapper(self.provider.load_current_chapter, cache_folder, "Info | Loading of the chapter has failed!",
+                                         "Maybe this chapter doesn't exist?\nIf that isn't the case, look in the logs for more info.")
         else:
             self.reload_window_title()
             self.settings.set_chapter(self.provider.get_chapter())
             self.task_successful = False
-            self.save_last_title(self.provider.get_title())
+            # self.gui_changing = True
             self.chapter_selector.setText(str(self.settings.get_chapter()))
+            # self.gui_changing = False
+            self.save_last_title(self.provider.__class__.__name__.removesuffix("Provider"), self.provider.get_title(), self.settings.get_chapter())
             print("Reloading images ...")
             self.scrollarea.verticalScrollBar().setValue(0)
             self.scrollarea.horizontalScrollBar().setValue((self.scrollarea.width() // 2))
             self.reload_content()
+        self.cache_manager.ensure_less_than(self.settings.get_advanced_settings().get("misc", {}).get("max_cached_chapters", -1), self.provider.get_chapter())
+
+    def ensure_loaded_chapter(self) -> None:
+        cache_folder: str = self.cache_manager.get_cache_folder(self.provider.get_chapter())
+        if not self.cache_manager.is_cache_loaded(cache_folder):
+            self.chapter_loading_wrapper(self.provider.load_current_chapter, cache_folder, "Info | Reloading of the chapter has failed",
+                                         "Maybe this chapter doesn't exist?\nIf that isn't the case, look in the logs for more info.")
+        else:
+            self.reload_window_title()
+            self.settings.set_chapter(self.provider.get_chapter())
+            self.task_successful = False
+            # self.gui_changing = True
+            self.chapter_selector.setText(str(self.settings.get_chapter()))
+            # self.gui_changing = False
+            self.save_last_title(self.provider.__class__.__name__.removesuffix("Provider"), self.provider.get_title(), self.settings.get_chapter())
+            print("Reloading images ...")
+            self.scrollarea.verticalScrollBar().setValue(0)
+            self.scrollarea.horizontalScrollBar().setValue((self.scrollarea.width() // 2))
+            self.reload_content()
+        self.cache_manager.ensure_less_than(self.settings.get_advanced_settings().get("misc", {}).get("max_cached_chapters", -1), self.provider.get_chapter())
 
     def reload_chapter(self) -> None:
-        self.reset_cache()
-        self.chapter_loading_wrapper(self.provider.load_current_chapter, "Info | Reloading of chapter has failed",
-                                     "The reloading the current chapter has failed.\nLook in the logs for more info.")
+        cache_folder = self.cache_manager.get_cache_folder(self.provider.get_chapter())
+        self.cache_manager.clear_cache(cache_folder)
+        os.makedirs(cache_folder)
+        self.chapter_loading_wrapper(self.provider.load_current_chapter, cache_folder, "Info | Reloading of chapter has failed",
+                                     "Maybe this chapter doesn't exist?\nIf that isn't the case, look in the logs for more info.")
+        self.cache_manager.ensure_less_than(self.settings.get_advanced_settings().get("misc", {}).get("max_cached_chapters", -1), self.provider.get_chapter())
 
     # Window Methods
     def resizeEvent(self, event):
@@ -1365,6 +2335,7 @@ class MainWindow(QMainWindow):
         self.scrollarea._onScroll()
 
     def closeEvent(self, event):
+        self.wait_for_tasks()
         can_exit = True
         if can_exit:
             print("Exiting ...")

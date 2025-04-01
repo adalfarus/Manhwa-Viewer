@@ -1,5 +1,5 @@
 """TBA"""
-from modules.ProviderPlugin import OnlineProvider, ManhwaLikeProvider  # Remove ManhwaLike
+from modules.ProviderPlugin import OnlineProvider, ManhwaLikeProvider, ProviderImage  # Remove ManhwaLike
 
 from urllib.parse import urlencode, urlunparse, quote_plus, urljoin
 from bs4 import BeautifulSoup
@@ -10,8 +10,8 @@ import re
 
 
 class AsuraToonProvider(OnlineProvider):
-    def __init__(self, title: str, chapter: int, cache_folder: str, logo_folder: str) -> None:
-        super().__init__(title, chapter, cache_folder, logo_folder)
+    def __init__(self, title: str, chapter: int, library_path: str, logo_folder: str) -> None:
+        super().__init__(title, chapter, library_path, logo_folder)
         self._logo_path: str = os.path.join(logo_folder, "logo_asuratoon.png")
         if os.path.isfile(self._logo_path):
             return
@@ -24,9 +24,13 @@ class AsuraToonProvider(OnlineProvider):
         except Exception as e:
             print(f"An error occurred {e}")
             return
+        self.clipping_space = (0, 0, -2, -2)
 
     def get_logo_path(self) -> str:
         return self._logo_path
+
+    def get_icon_path(self) -> str:
+        return ""
 
     def _search(self, query=None):
         base_url = "asuratoon.net"
@@ -89,36 +93,30 @@ class AsuraToonProvider(OnlineProvider):
 
 
 class MangaDexProvider(ManhwaLikeProvider):
-    def __init__(self, title: str, chapter: int, cache_folder: str, logo_folder: str) -> None:
-        super().__init__(title=title, chapter=chapter, cache_folder=cache_folder, logo_folder=logo_folder,
-                         specific_provider_website="mangadex.org", logo_name="logo_mangadex",
-                         logo_url_or_data="",
-                         logo_img_format="png", logo_img_type="url")
-        self.clipping_space = (0, 0, "max", "max")
+    def __init__(self, title: str, chapter: int, library_path: str, logo_folder: str) -> None:
+        super().__init__(title=title, chapter=chapter, library_path=library_path, logo_folder=logo_folder,
+                         specific_provider_website="mangadex.org", logo=ProviderImage("logo_mangadex", "png", "url", ""), icon=None)
+        self.clipping_space = (0, 0, -1, -2)
 
     def can_work(self) -> bool:
         return False
 
 
 class BatoToProvider(ManhwaLikeProvider):
-    def __init__(self, title: str, chapter: int, cache_folder: str, logo_folder: str) -> None:
-        super().__init__(title=title, chapter=chapter, cache_folder=cache_folder, logo_folder=logo_folder,
-                         specific_provider_website="bato.to", logo_name="logo_bato",
-                         logo_url_or_data="",
-                         logo_img_format="png", logo_img_type="url")
-        self.clipping_space = (0, 0, "max", "max")
+    def __init__(self, title: str, chapter: int, library_path: str, logo_folder: str) -> None:
+        super().__init__(title=title, chapter=chapter, library_path=library_path, logo_folder=logo_folder,
+                         specific_provider_website="bato.to", logo=ProviderImage("logo_bato", "png", "url", ""), icon=None)
+        self.clipping_space = (0, 0, -1, -2)
 
     def can_work(self) -> bool:
         return False
 
 
 class MagusToonProvider(ManhwaLikeProvider):
-    def __init__(self, title: str, chapter: int, cache_folder: str, logo_folder: str) -> None:
-        super().__init__(title=title, chapter=chapter, cache_folder=cache_folder, logo_folder=logo_folder,
-                         specific_provider_website="magustoon.net", logo_name="logo_magustoon",
-                         logo_url_or_data="",
-                         logo_img_format="png", logo_img_type="url")
-        self.clipping_space = (0, 0, "max", "max")
+    def __init__(self, title: str, chapter: int, library_path: str, logo_folder: str) -> None:
+        super().__init__(title=title, chapter=chapter, library_path=library_path, logo_folder=logo_folder,
+                         specific_provider_website="magustoon.net", logo=ProviderImage("logo_magustoon", "png", "url", ""), icon=None)
+        self.clipping_space = (0, 0, -1, -2)
 
     def can_work(self) -> bool:
         return False
