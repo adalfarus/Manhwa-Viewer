@@ -1,4 +1,5 @@
 """TBA"""
+from PySide6.QtCore import Signal
 from aplustools.web.request import UnifiedRequestHandler
 from playwright.sync_api import sync_playwright, Error as PlaywrightError, Playwright, Browser
 from aplustools.package.timid import TimidTimer
@@ -81,7 +82,7 @@ class CoreSaver(metaclass=ABCMeta):
     @abstractmethod
     def save_chapter(cls, provider: "CoreProvider",chapter_number: str, chapter_title: str, chapter_img_folder: str,
                      quality_present: _ty.Literal["best_quality", "quality", "size", "smallest_size"],
-                     progress_queue: Queue[int] | None = None) -> bool:
+                     progress_signal: Signal | None = None) -> _ty.Generator[None, None, bool]:
         ...
 
     @classmethod
@@ -108,6 +109,7 @@ class CoreSaver(metaclass=ABCMeta):
 class CoreProvider(metaclass=ABCMeta):
     needs_library_path: bool = False
     register_baseclass: str = "CoreProvider"
+    use_threading: bool = True
     saver: _ty.Type[CoreSaver] | None = None
     # You can find the button popup def in main.py under the MainWindow cls, IT IS NOT THREAD SAFE, DO NOT CALL IN CHAPTER LOADING METHODS
     button_popup: _ty.Callable[[str, str, str, _ty.Literal["Information", "Critical", "Question", "Warning", "NoIcon"], list[str], str, str | None], tuple[str | None, bool]]
@@ -157,14 +159,23 @@ class CoreProvider(metaclass=ABCMeta):
     def increase_chapter(self, by: float) -> None:
         self._chapter += by
 
-    def load_current_chapter(self, current_cache_folder: str, progress_queue: Queue[int] | None = None) -> bool:
+    def load_current_chapter(self, current_cache_folder: str, progress_signal: Signal | None = None) -> _ty.Generator[None, None, bool]:
         self._current_cache_folder = current_cache_folder
-        ret_val = self._load_current_chapter(progress_queue=progress_queue)
-        self._current_cache_folder = None
-        return ret_val
+        gen = self._load_current_chapter()
+        try:
+            while True:
+                progress = next(gen)
+                if progress is not None:
+                    progress_signal.emit(progress)
+                yield  # Return control briefly
+        except StopIteration as e:
+            ret_val = e.value
+        finally:
+            self._current_cache_folder = None
+        return bool(ret_val)
 
     @abstractmethod
-    def _load_current_chapter(self, progress_queue: Queue[int] | None = None) -> bool:
+    def _load_current_chapter(self) -> _ty.Generator[int, None, bool]:
         ...
 
     @abstractmethod
@@ -258,9 +269,8 @@ class LibrarySaver(CoreSaver, metaclass=ABCMeta):
         return ""
 
     @classmethod
-    def save_chapter(cls, provider: CoreProvider, chapter_number: str, chapter_title: str, chapter_img_folder: str,
-                     quality_present: _ty.Literal["best_quality", "quality", "size", "smallest_size"],
-                     progress_queue: Queue[int] | None = None) -> bool:
+    def _ensure_valid_chapter(cls, provider: CoreProvider, chapter_number: str, chapter_title: str, chapter_img_folder: str,
+                     quality_present: _ty.Literal["best_quality", "quality", "size", "smallest_size"]) -> bool:
         if not cls._should_work(provider.get_library_path()):
             return False
         cid = cls._find_content_folder(provider.get_title(), provider.get_library_path())
@@ -540,7 +550,8 @@ class OnlineProvider(CoreProvider, metaclass=ABCMeta):
         self._total_images: int = 0
         self._download_progress_queue: Queue = Queue()
         self._process_progress_queue: Queue = Queue()
-        self._js_enabled: bool = self._enable_js(enable_js)
+        self._js_enabled: bool = enable_js
+        self.use_threading = not self._js_enabled  # Playwright can only run efficiently in the main thread I guess? And it also has crazy problems with hallucinating asyncio event loops
 
     def _enable_js(self, enable: bool) -> bool:
         if not enable or (self._playwright is not None and self._browser is not None):
@@ -573,13 +584,14 @@ class OnlineProvider(CoreProvider, metaclass=ABCMeta):
         self._chapter += by
         self._chap(self._chapter)
 
-    def _load_current_chapter(self, progress_queue: Queue[int] | None = None) -> bool:
+    def _load_current_chapter(self) -> _ty.Generator[int, None, bool]:
         print("Updating current URL...")
         new_url: str | None = self._get_current_chapter_url()
 
         if new_url is not None:
             if not is_crawlable("*", new_url):
                 print(f"URL {new_url} is not crawlable, returning")
+                yield 0
                 return False
             self._current_url = new_url
             print(f"Current URL set to: {self._current_url}")
@@ -588,12 +600,10 @@ class OnlineProvider(CoreProvider, metaclass=ABCMeta):
                 # print("Handle cache result got: ", progress_or_result)
                 if isinstance(progress_or_result, bool):  # Check if it's the final result
                     return progress_or_result
-                if progress_queue is not None:
-                    progress_queue.put(progress_or_result)  # Put the progress into the queue
+                yield progress_or_result  # Put the progress into the queue
             return False  # Should not happen
         print("Failed to update current URL.")
-        if progress_queue is not None:
-            progress_queue.put(0)
+        yield 0
         return False
 
     @abstractmethod
@@ -632,7 +642,7 @@ class OnlineProvider(CoreProvider, metaclass=ABCMeta):
     #         print(f"{len(validated_tags)} images downloaded!")
     #         return results
 
-    def _download_using_js(self) -> bool:
+    def _download_using_js(self) -> _ty.Generator[int, None, bool]:
         print("[JS MODE] Using Playwright for image downloads.")
         page = self._browser.new_page()
         all_image_responses: dict[str, _ty.Any] = {}  # Cache all image responses
@@ -649,20 +659,22 @@ class OnlineProvider(CoreProvider, metaclass=ABCMeta):
         page.on("response", _capture_all_images)
 
         page.goto(self._current_url, wait_until="networkidle")  # Visit current url
-        page.evaluate("""() => {
-            return new Promise(resolve => {
-                let totalHeight = 0;
-                const distance = 100;
-                const timer = setInterval(() => {
-                    window.scrollBy(0, distance);
-                    totalHeight += distance;
-                    if (totalHeight >= document.body.scrollHeight) {
-                        clearInterval(timer);
-                        resolve();
+        page.evaluate("""
+            () => {
+                return new Promise(async resolve => {
+                    const images = Array.from(document.querySelectorAll('img'));
+                    const imageCount = images.length;
+                    const totalScrollTime = 12 * 10; // 12 "scroll units" × 10ms base = 120ms total target time
+                    const delayPerImage = Math.max(10, Math.floor(totalScrollTime / Math.max(1, imageCount)));
+        
+                    for (let img of images) {
+                        img.scrollIntoView({ behavior: 'instant', block: 'center' });
+                        await new Promise(r => setTimeout(r, delayPerImage));
                     }
-                }, 100);
-            });
-        }""")  # Scroll through entire page to trigger all lazy loading using js
+                    resolve();
+                });
+            }
+        """)  # Scroll through entire page to trigger all lazy loading using js
         page.wait_for_timeout(3000)  # To ensure enough time has passed for all images to be loaded
 
         soup = BeautifulSoup(page.content(), "html.parser")  # Extract the DOM to be analyzed by _be_picky
@@ -670,6 +682,7 @@ class OnlineProvider(CoreProvider, metaclass=ABCMeta):
         print(f"[JS MODE] Found {len(img_tags)} <img> tags after JS render.")
         if not img_tags:
             print("[JS MODE] No images found in _be_picky. Exiting early.")
+            yield 0
             return False
         self._total_images = len(img_tags)
         self._downloaded_images_count = 0
@@ -689,7 +702,7 @@ class OnlineProvider(CoreProvider, metaclass=ABCMeta):
                     f.write(content)
                 self._downloaded_images_count += 1
                 progress = int((self._downloaded_images_count / self._total_images) * 100)
-                self._download_progress_queue.put(progress)
+                yield progress
                 print(f"[JS MODE] Saved image[{count}] > {filename}")
             else:
                 print(f"[JS MODE] Skipped image[{count}] - No matching response for {url_base}")
@@ -714,7 +727,7 @@ class OnlineProvider(CoreProvider, metaclass=ABCMeta):
     #     print(f"Combined async download result: {download_result}")
     #     return self._downloaded_images_count > 0
 
-    def _download_using_request(self) -> bool:
+    def _download_using_request(self) -> _ty.Generator[int, None, bool]:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
@@ -735,6 +748,7 @@ class OnlineProvider(CoreProvider, metaclass=ABCMeta):
 
         if not img_tags:
             print("[REQ MODE] No images found after filtering.")
+            yield 0
             return False
 
         # Step 4: Prepare image URLs and file paths
@@ -774,56 +788,49 @@ class OnlineProvider(CoreProvider, metaclass=ABCMeta):
                     f.write(data)
                 self._downloaded_images_count += 1
                 progress = int((self._downloaded_images_count / self._total_images) * 100)
-                self._download_progress_queue.put(progress)
+                yield progress
                 print(f"[REQ MODE] Saved image[{i}] > {os.path.basename(file_path)}")
             else:
                 print(f"[REQ MODE] Failed to download image[{i}]: {image_urls[i]}")
         return self._downloaded_images_count > 0
 
-    def _download_images(self) -> bool:
-        try:
-            if self._js_enabled:
-                return self._download_using_js()
-            return self._download_using_request()
-        except Exception as e:
-            print(f"An error occurred: {format_exc()}")
-            return False
-
     @abstractmethod
     def _be_picky(self, soup: BeautifulSoup) -> list[dict]:
         ...
 
-    def _cache_current_chapter(self) -> _ty.Generator[int | bool, _ty.Any, None]:
+    def _cache_current_chapter(self) -> _ty.Generator[int | bool, None, None]:
         timer = TimidTimer()
         if not self._current_url:
             print("URL not found.")
             yield 0
             yield False
+            return
 
         timer.start(1)
-        download_result_queue: Queue = Queue()
-        download_thread = threading.Thread(target=lambda q=download_result_queue: q.put(self._download_images()))
-        download_thread.start()
-        print(f"Download-Thread startup time: {timer.end(1)}")
-
+        print("Starting inline download with manual generator handling...")
         current_download_progress: int = 0
         combined_progress: int = 0
         yield 0
 
-        while True:
-            if not download_thread.is_alive() and self._download_progress_queue.empty():
-                break
-            while not self._download_progress_queue.empty():  # Handle download progress
-                new_download_progress = self._download_progress_queue.get()
-                progress_diff = new_download_progress - current_download_progress
-                combined_progress += progress_diff
-                current_download_progress = new_download_progress
-                yield combined_progress // 2
-            time.sleep(0.1)
-        print("Download thread done")
-
-        download_result: bool = download_result_queue.get()
-        print(f"Download Result: {download_result}, ({timer.end()})")
+        try:
+            # Select the correct download method
+            if self._js_enabled:
+                download_gen = self._download_using_js()
+            else:
+                download_gen = self._download_using_request()
+            try:
+                while True:
+                    progress = next(download_gen)
+                    progress_diff = progress - current_download_progress
+                    current_download_progress = progress
+                    combined_progress += progress_diff
+                    yield combined_progress // 2
+            except StopIteration as e:
+                download_result = e.value
+        except Exception as e:
+            print(f"An error occurred: {format_exc()}")
+            download_result = False
+        print(f"Download complete ({timer.end()}), result: {download_result}")
         yield download_result
 
     def __del__(self):

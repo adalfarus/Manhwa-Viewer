@@ -50,7 +50,7 @@ hiddenimports = list(stdlib_list.stdlib_list())
 
 # old_dir = os.getcwd()
 set_dir_to_ex()
-# os.chdir(os.path.join(os.getcwd(), './_internal'))
+os.chdir(os.path.join(os.getcwd(), './_internal'))
 
 
 class OldLibraryEdit(QComboBox):
@@ -383,7 +383,6 @@ class TransferDialog(QDialog):
             progress_dialog = CustomProgressDialog(
                 parent=self,
                 window_title="Transferring ...",
-                window_icon="",
                 window_label="Doing a task...",
                 button_text="Cancel",
                 new_thread=True,
@@ -1282,7 +1281,7 @@ class MainWindow(QMainWindow):
     def toggle_save_last_titles_checkbox(self):
         self.settings.set_save_last_titles(self.save_last_titles_checkbox.isChecked())
 
-    def advanced_settings(self, blocking: bool = True):
+    def advanced_settings(self, *_, blocking: bool = True):
         settings = self.settings.get_advanced_settings()
         default_settings = json.loads(self.settings.get_default_setting("advanced_settings"))
         self.settings.close()
@@ -2170,8 +2169,7 @@ class MainWindow(QMainWindow):
         progress_dialog = CustomProgressDialog(
             self,
             window_title="Loading ...",
-            window_icon=f"{self.data_folder}/Untitled-1-noBackground.png",
-            new_thread=new_thread,
+            new_thread=self.provider.use_threading,
             func=func,
             args=args,
             kwargs=kwargs)

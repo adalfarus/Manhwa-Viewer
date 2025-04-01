@@ -4,6 +4,7 @@ import shutil
 from datetime import datetime
 
 from PIL import Image
+from PySide6.QtCore import Signal
 
 from modules.ProviderPlugin import CoreProvider, LibraryProvider, ProviderImage, CoreSaver, LibrarySaver
 import typing as _ty
@@ -13,9 +14,10 @@ class WebPSaver(LibrarySaver):
     @classmethod
     def save_chapter(cls, provider: CoreProvider, chapter_number: str, chapter_title: str, chapter_img_folder: str,
                      quality_present: _ty.Literal["best_quality", "quality", "size", "smallest_size"],
-                     progress_queue=None) -> bool:
+                     progress_signal: Signal | None = None) -> _ty.Generator[None, None, bool]:
         ret_val = super()._ensure_valid_chapter(provider, chapter_number, chapter_title, chapter_img_folder, quality_present)
         if not ret_val:
+            yield
             return False
         chapter_number_str = str(float(chapter_number))
         content_path: str = os.path.join(provider.get_library_path(), cls.curr_uuid)
@@ -47,6 +49,7 @@ class WebPSaver(LibrarySaver):
         ]
         total_images = len(image_files)
         if total_images == 0:
+            yield
             return False
 
         for index, img_file in enumerate(image_files):
@@ -62,9 +65,10 @@ class WebPSaver(LibrarySaver):
                 print(f"Failed to process image {img_file}: {e}")
 
             # Report image progress (0–90%)
-            if progress_queue is not None:
+            if progress_signal is not None:
                 percent = int((index + 1) / total_images * 90)
-                progress_queue.put(percent)
+                progress_signal.emit(percent)
+                yield  # Yield control
 
         # Update data.json
         data_path = os.path.join(content_path, "data.json")
@@ -92,7 +96,7 @@ class WebPSaver(LibrarySaver):
             "title": chapter_title,
             "location": os.path.relpath(chapter_folder, content_path),
             "quality_present": quality_present,
-            "series": provider.get_title(),
+            # "series": provider.get_title(),
             "volume": -1,
             "summary": "",
             "date": {
@@ -124,8 +128,9 @@ class WebPSaver(LibrarySaver):
 
         with open(data_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
-        if progress_queue is not None:
-            progress_queue.put(100)
+        if progress_signal is not None:
+            progress_signal.emit(100)
+            yield  # Yield control
         return True
 
 
@@ -138,12 +143,13 @@ class WebPLibraryProvider(LibraryProvider):
         super().__init__(title, chapter, library_path, logo_folder, logo, icon)
         # self.clipping_space = (0, 0, -1, -2)
 
-    def _load_current_chapter(self, progress_queue=None) -> bool:
+    def _load_current_chapter(self) -> _ty.Generator[int, None, bool]:
         chapter_number_str = str(float(self._chapter))
         chapter_folder = os.path.join(self._content_path, "chapters", chapter_number_str)
 
         if not os.path.isdir(chapter_folder):
             print(f"Chapter folder not found: {chapter_folder}")
+            yield 0
             return False
 
         image_files = sorted([
@@ -154,6 +160,7 @@ class WebPLibraryProvider(LibraryProvider):
 
         if not image_files:
             print(f"No images found in chapter {chapter_number_str}")
+            yield 0
             return False
 
         # Clear the cache folder
@@ -172,9 +179,8 @@ class WebPLibraryProvider(LibraryProvider):
                 print(f"Failed to copy {src} → {dst}: {e}")
                 continue
 
-            if progress_queue:
-                progress = int((idx / total) * 100)
-                progress_queue.put(progress)
+            progress = int((idx / total) * 100)
+            yield progress
 
         print(f"Loaded chapter {self._chapter} with {total} images.")
         return True

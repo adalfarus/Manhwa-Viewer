@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 
 from PIL import Image
+from PySide6.QtCore import Signal
 
 from modules.ProviderPlugin import CoreProvider, LibraryProvider, ProviderImage, CoreSaver, LibrarySaver
 import typing as _ty
@@ -59,9 +60,10 @@ class ComicBookSaver(LibrarySaver):
 
     @classmethod
     def save_chapter(cls, provider, chapter_number, chapter_title, chapter_img_folder,
-                     quality_present, progress_queue=None) -> bool:
+                     quality_present, progress_signal: Signal | None = None) -> _ty.Generator[None, None, bool]:
         ret_val = super()._ensure_valid_chapter(provider, chapter_number, chapter_title, chapter_img_folder, quality_present)
         if not ret_val:
+            yield
             return False
 
         # Use same path as StdSaver would
@@ -91,6 +93,7 @@ class ComicBookSaver(LibrarySaver):
             ])
             total_images = len(image_files)
             if total_images == 0:
+                yield
                 return False
 
             for idx, img_file in enumerate(image_files):
@@ -106,8 +109,9 @@ class ComicBookSaver(LibrarySaver):
                 except Exception as e:
                     print(f"Error resizing {img_file}: {e}")
 
-                if progress_queue:
-                    progress_queue.put(int((idx + 1) / total_images * 90))
+                if progress_signal:
+                    progress_signal.emit(int((idx + 1) / total_images * 90))
+                    yield  # Yield control
 
             # Add ComicInfo.xml with metadata
             cls._write_comicinfo_xml(
@@ -123,6 +127,7 @@ class ComicBookSaver(LibrarySaver):
                 create_archive(archive_path, temp_dir, format=cls.archive_format)
             except Exception as e:
                 print(f"Failed to create .cbz archive: {e}")
+                yield
                 return False
 
         # Update data.json
@@ -151,7 +156,7 @@ class ComicBookSaver(LibrarySaver):
             "title": chapter_title,
             "location": os.path.relpath(archive_path, content_path),
             "quality_present": quality_present,
-            "series": provider.get_title(),
+            # "series": provider.get_title(),
             "volume": -1,
             "summary": "",
             "date": {
@@ -183,8 +188,9 @@ class ComicBookSaver(LibrarySaver):
 
         with open(data_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
-        if progress_queue is not None:
-            progress_queue.put(100)
+        if progress_signal is not None:
+            progress_signal.emit(100)
+            yield  # Yield control
         return True
 
     @staticmethod
@@ -229,12 +235,13 @@ class ComicBookLibraryProvider(LibraryProvider):
         super().__init__(title, chapter, library_path, logo_folder, logo, None)
         self.clipping_space = (0, 0, -1, -2)
 
-    def _load_current_chapter(self, progress_queue=None) -> bool:
+    def _load_current_chapter(self) -> _ty.Generator[int, None, bool]:
         chapter_number_str = str(float(self._chapter))
         chapter_archive = os.path.join(self._content_path, "chapters", f"{chapter_number_str}.cbz")
 
         if not os.path.isfile(chapter_archive):
             print(f"[CBZ] Chapter archive not found: {chapter_archive}")
+            yield 0
             return False
 
         # Extract archive into temp dir
@@ -243,11 +250,13 @@ class ComicBookLibraryProvider(LibraryProvider):
                 extract_archive(chapter_archive, temp_extract_folder)
             except Exception as e:
                 print(f"[CBZ] Failed to extract {chapter_archive}: {e}")
+                yield 0
                 return False
 
             pages_folder = os.path.join(temp_extract_folder, "pages")
             if not os.path.isdir(pages_folder):
                 print(f"[CBZ] No 'pages/' directory found in archive.")
+                yield 0
                 return False
 
             image_files = sorted([
@@ -258,6 +267,7 @@ class ComicBookLibraryProvider(LibraryProvider):
 
             if not image_files:
                 print(f"[CBZ] No images found in {chapter_archive}")
+                yield 0
                 return False
 
             # Prepare cache folder
@@ -275,9 +285,8 @@ class ComicBookLibraryProvider(LibraryProvider):
                     print(f"Failed to copy {src} → {dst}: {e}")
                     continue
 
-                if progress_queue:
-                    progress = int((idx / total) * 100)
-                    progress_queue.put(progress)
+                progress = int((idx / total) * 100)
+                yield progress
 
         print(f"[CBZ] Loaded chapter {self._chapter} from archive with {total} images.")
         return True

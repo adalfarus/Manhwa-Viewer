@@ -14,6 +14,11 @@ class ZinMangaProvider(ManhwaLikeProvider):
                          specific_provider_website="zinmanga.net", logo=logo, icon=None, enable_js=True)
         self.clipping_space = (0, 0, -1, -2)
 
+    def _get_current_chapter_url(self) -> str | None:
+        url = f"https://{self._specific_provider_website}/manga/{slugify(self._title)}/" + f"chapter-{self._chapter_str}/"
+        print("Found URL:" + url)  # Concatenate (add-->+) string, to avoid breaking timestamps
+        return url
+
     def is_working(self) -> bool:
         return True
 

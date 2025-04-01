@@ -508,18 +508,14 @@ class TaskRunner(QThread):
     task_completed = Signal(bool, object)
     progress_signal = Signal(int)
 
-    def __init__(self, new_thread, func, args, kwargs):
+    def __init__(self, func: _ty.Callable[[_ty.Any], _ty.Any], args: tuple[_ty.Any, ...], kwargs: dict[str, _ty.Any] | None) -> None:
         super().__init__()
-        self.new_thread = new_thread
-        self.func = func
-        self.args = args
-        self.kwargs = kwargs
-        self.is_running = True
-        self.worker_thread = None
-        self.result = None
-        self.success = False
-        if new_thread:
-            self.progress_queue = queue.Queue()
+        self.func: _ty.Callable[[_ty.Any], _ty.Any] = func
+        self.args: tuple[_ty.Any, ...] = args
+        self.kwargs: dict[str, _ty.Any] = kwargs or {}
+        self.is_running: bool = True
+        self.result: _ty.Any | None = None
+        self.success: bool = False
 
     class TaskCanceledException(Exception):
         """Exception to be raised when the task is canceled"""
@@ -530,27 +526,9 @@ class TaskRunner(QThread):
     def run(self):
         if not self.is_running:
             return
-
         try:
-            if self.new_thread:
-                self.worker_thread = threading.Thread(target=self.worker_func)
-                self.worker_thread.start()
-                while self.worker_thread.is_alive():
-                    try:
-                        progress = self.progress_queue.get_nowait()
-                        self.progress_signal.emit(progress)
-                    except queue.Empty:
-                        pass
-                    self.worker_thread.join(timeout=0.1)
-                print("Worker thread died. Emitting result now ...")
-            else:
-                print("Directly executing")
-                update = False
-                for update in self.func(*self.args, **self.kwargs)():
-                    if isinstance(update, int):
-                        self.progress_signal.emit(update)
-                self.result = update
-                print("RES", self.result)
+            print("Directly executing")
+            self.worker_func()
             self.task_completed.emit(self.success and self.result, self.result)  # As the result is a bool to check status
 
         except Exception as e:
@@ -559,10 +537,14 @@ class TaskRunner(QThread):
 
     def worker_func(self):
         try:
-            if self.new_thread:
-                self.result = self.func(*self.args, **self.kwargs, progress_queue=self.progress_queue)
-            else:
-                return self.func(*self.args, **self.kwargs)
+            gen = self.func(*self.args, **self.kwargs, progress_signal=self.progress_signal)
+            while True:
+                try:
+                    next(gen)
+                except StopIteration as e:
+                    result = e.value
+                    break
+            self.result = result
             self.success = True
         except SystemExit:
             self.success = False
@@ -577,100 +559,83 @@ class TaskRunner(QThread):
         print("Task is stopping.")
         self.is_running = False
         if not self.isFinished():
-            self.raise_exception()
             self.wait()
 
-    def get_thread_id(self):
-        if self.worker_thread:
-            return self.worker_thread.ident
 
-    def raise_exception(self):
-        thread_id = self.get_thread_id()
-        if thread_id:
-            res = ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(thread_id), ctypes.py_object(SystemExit))
-            if res > 1:
-                ctypes.pythonapi.PyThreadState_SetAsyncExc(thread_id, 0)
-                print("Exception raise failure")
+class SyncProgressEmitter(QObject):
+    progress_signal = Signal(int)
 
 
 class CustomProgressDialog(QProgressDialog):
-    def __init__(self, parent, window_title, window_icon, window_label="Doing a task...", button_text="Cancel",
-                 new_thread=True, func=lambda: None, args=(), kwargs=None):
-        super().__init__(parent=parent, cancelButtonText=button_text, minimum=0, maximum=100)
-        if kwargs is None:
-            kwargs = {}
-        self.ttimer = TimidTimer()
+    def __init__(self, parent: QWidget, window_title: str, window_label: str = "Doing a task...", button_text: str = "Cancel",
+                 new_thread: bool = True, func: _ty.Callable[[_ty.Any], _ty.Any] = lambda _: None,
+                 args: tuple[_ty.Any, ...] = (), kwargs: dict[str, _ty.Any] | None = None) -> None:
+        super().__init__("", button_text, 0, 100, parent=parent)
         self.setWindowTitle(window_title)
-        # self.setValue(0)
-        # self.setWindowIcon(QIcon(window_icon))
-
-        self.customLayout = QVBoxLayout(self)
-        self.customLabel = QLabel(window_label, self)
-        self.customLayout.addWidget(self.customLabel)
-        self.customLayout.setAlignment(self.customLabel, Qt.AlignTop | Qt.AlignHCenter)
-
-        self.taskRunner = TaskRunner(new_thread, func, args=args, kwargs=kwargs)
-        self.taskRunner.task_completed.connect(self.onTaskCompleted)
-        self.taskRunner.progress_signal.connect(self.set_value)  # Connect progress updates
-        self.task_successful = False
-
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setAutoClose(False)
         self.setAutoReset(False)
-        self.setWindowModality(Qt.ApplicationModal)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+        self.task_successful: bool = False
+        # self.current_value: int = 0
+        # self.last_value: int = 0
+
+        self.setup_gui(window_label)
+
+        if new_thread:
+            self.taskRunner = TaskRunner(func, args, kwargs)
+            self.taskRunner.task_completed.connect(self.onTaskCompleted)
+            self.taskRunner.progress_signal.connect(self.setValue)  # Connect progress updates
+            QTimer.singleShot(50, self.taskRunner.start)
+        else:
+            self.sync_emitter = SyncProgressEmitter()
+            self.sync_emitter.progress_signal.connect(self.setValue)
+            QTimer.singleShot(50, lambda: self._run_sync_task(func, args, kwargs))
         self.canceled.connect(self.cancelTask)
 
+        # self.timer = QTimer(self)
+        # self.timer.timeout.connect(self.updateProgress)
+        # self.timer.start(100)
+
+    def setup_gui(self, window_label: str) -> None:
+        layout = QVBoxLayout(self)
+        self.window_label = QLabel(window_label, self)
+        layout.addWidget(self.window_label)
+        layout.setAlignment(self.window_label, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        self.setLayout(layout)
+
         # Set the dialog to be fixed size
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.adjustSize()  # Adjust size based on layout and contents
         self.setFixedSize(self.size())  # Lock the current size after adjusting
 
-        self.last_value = 0
-        self.current_value = 0
-        QTimer.singleShot(50, self.taskRunner.start)
-
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.updateProgress)
-        self.timer.start(100)
-        print(self.ttimer.tick(), "INIT DONE")
-
-    def updateProgress(self):
-        if self.value() <= 100 and not self.wasCanceled() and self.taskRunner.isRunning():
-            if self.current_value == 0 and self.value() < 10:
-                self.setValue(self.value() + 1)
-                time.sleep(random.randint(2, 10) * 0.1)
-            elif self.current_value >= 10:
-                self.smooth_value()
-            QApplication.processEvents()
-
-    def set_value(self, v):
-        self.current_value = v
-
-    def smooth_value(self):
-        # If the difference is significant, set the value immediately
-        if abs(self.current_value - self.last_value) > 10:  # You can adjust this threshold
-            self.setValue(self.current_value)
-            self.last_value = self.current_value
-            return
-
-        for i in range(max(10, self.last_value), self.current_value):
-            self.setValue(i + 1)
-            self.last_value = i + 1
-            time.sleep(0.1)
-        # print(f"Exiting go_to_value with value {self.current_value} and last_value {self.last_value}") # Debug
-
-    def resizeEvent(self, event):
-        super(CustomProgressDialog, self).resizeEvent(event)
-
-        # Attempt to find the label as a child widget
-        label: QLabel = self.findChild(QLabel)
-        if label:
-            label.setStyleSheet("""background: transparent;""")
+    # def updateProgress(self):
+    #     if self.value() <= 100 and not self.wasCanceled() and self.taskRunner.isRunning():
+    #         if self.current_value == 0 and self.value() < 10:
+    #             self.setValue(self.value() + 1)
+    #             time.sleep(random.randint(2, 10) * 0.1)
+    #         elif self.current_value >= 10:
+    #             self.smooth_value()
+    #         QApplication.processEvents()
+    #
+    # def smooth_value(self):
+    #     # If the difference is significant, set the value immediately
+    #     if abs(self.current_value - self.last_value) > 10:  # You can adjust this threshold
+    #         self.setValue(self.current_value)
+    #         self.last_value = self.current_value
+    #         return
+    #
+    #     for i in range(max(10, self.last_value), self.current_value):
+    #         self.setValue(i + 1)
+    #         self.last_value = i + 1
+    #         time.sleep(0.1)
 
     @Slot(bool, object)
     def onTaskCompleted(self, success, result):
         print("Task completed method called.")
-        self.taskRunner.quit()
-        self.taskRunner.wait()
+        if hasattr(self, "taskRunner"):
+            self.taskRunner.quit()
+            self.taskRunner.wait()
 
         if not self.wasCanceled():
             if success:
@@ -680,25 +645,37 @@ class CustomProgressDialog(QProgressDialog):
                     "Finished" if result else "Not finished"))  # Adjust as needed
                 QTimer.singleShot(1000, self.accept)  # Close after 1 second if successful
             else:
-                palette = QPalette(self.palette())
-                palette.setColor(QPalette.Highlight, QColor(Qt.red))
-                self.setPalette(palette)
-                self.customLabel.setText("Task failed!")
+                self.window_label.setText("Task failed!")
                 self.setCancelButtonText("Close")
                 QTimer.singleShot(1, self.accept)  # Close after 1 second if successful
-        print("DONE", self.ttimer.end())
+
+    def _run_sync_task(self, func, args, kwargs):
+        try:
+            gen = func(*args, **(kwargs or {}), progress_signal=self.sync_emitter.progress_signal)
+            while True:
+                try:
+                    next(gen)
+                    QApplication.processEvents()
+                except StopIteration as e:
+                    result = e.value
+                    break
+            self.onTaskCompleted(True, result)
+        except Exception:
+            print("[Dialog] Sync task failed:")
+            print(format_exc())
+            self.onTaskCompleted(False, None)
 
     def cancelTask(self):
-        if self.taskRunner.isRunning():
-            self.taskRunner.stop()
-            self.taskRunner.wait()
-        # self.setValue(0)
-        self.customLabel.setText("Task cancelled")
+        if hasattr(self, "taskRunner"):
+            if self.taskRunner.isRunning():
+                self.taskRunner.terminate()
+        else:  # Directly executing
+            ...
+        self.window_label.setText("Task cancelled")
         self.close()
 
     def closeEvent(self, event):
-        if self.taskRunner.isRunning():
-            self.cancelTask()
+        self.cancelTask()
         event.accept()
 
 
@@ -711,7 +688,7 @@ class TaskWidget(QWidget):
         self.func = func
         self.args = args
         self.kwargs = kwargs or {}
-        self.new_thread = new_thread
+        # self.new_thread = new_thread
         self.task_successful = False
         self.task_canceled = False
 
@@ -733,7 +710,7 @@ class TaskWidget(QWidget):
         self.main_layout.addWidget(self.progress)
         self.main_layout.addWidget(self.cancel_button)
 
-        self.task_runner = TaskRunner(new_thread, self.func, self.args, self.kwargs)
+        self.task_runner = TaskRunner(self.func, self.args, self.kwargs)
         self.task_runner.task_completed.connect(self.onTaskCompleted)
         self.task_runner.progress_signal.connect(self.set_value)
 

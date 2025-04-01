@@ -4,6 +4,7 @@ import shutil
 from datetime import datetime
 
 from PIL import Image
+from PySide6.QtCore import Signal
 
 from modules.ProviderPlugin import CoreProvider, LibraryProvider, ProviderImage, CoreSaver, LibrarySaver
 import typing as _ty
@@ -13,9 +14,10 @@ class TiffSaver(LibrarySaver):
     @classmethod
     def save_chapter(cls, provider: CoreProvider, chapter_number: str, chapter_title: str, chapter_img_folder: str,
                      quality_present: _ty.Literal["best_quality", "quality", "size", "smallest_size"],
-                     progress_queue=None) -> bool:
+                     progress_signal: Signal | None = None) -> _ty.Generator[None, None, bool]:
         ret_val = super()._ensure_valid_chapter(provider, chapter_number, chapter_title, chapter_img_folder, quality_present)
         if not ret_val:
+            yield
             return False
 
         chapter_number_str = str(float(chapter_number))
@@ -43,6 +45,7 @@ class TiffSaver(LibrarySaver):
         ])
         total_images = len(image_files)
         if total_images == 0:
+            yield
             return False
 
         frames = []
@@ -56,11 +59,13 @@ class TiffSaver(LibrarySaver):
                 print(f"[TIFF] Failed to process image {img_file}: {e}")
                 continue
 
-            if progress_queue:
-                progress_queue.put(int((idx + 1) / total_images * 90))
+            if progress_signal:
+                progress_signal.emit(int((idx + 1) / total_images * 90))
+                yield  # Yield control
 
         if not frames:
             print("[TIFF] No images processed successfully for .tiff.")
+            yield
             return False
 
         try:
@@ -75,6 +80,7 @@ class TiffSaver(LibrarySaver):
             frames[0].save(tiff_path, **save_kwargs)
         except Exception as e:
             print(f"[TIFF] Failed to save TIFF: {e}")
+            yield
             return False
 
         # Update data.json
@@ -101,7 +107,7 @@ class TiffSaver(LibrarySaver):
             "title": chapter_title,
             "location": os.path.relpath(tiff_path, content_path),
             "quality_present": quality_present,
-            "series": provider.get_title(),
+            # "series": provider.get_title(),
             "volume": -1,
             "summary": "",
             "date": {
@@ -134,8 +140,9 @@ class TiffSaver(LibrarySaver):
         with open(data_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
 
-        if progress_queue:
-            progress_queue.put(100)
+        if progress_signal:
+            progress_signal.emit(100)
+            yield  # Yield control
 
         return True
 
@@ -149,12 +156,13 @@ class TiffLibraryProvider(LibraryProvider):
         super().__init__(title, chapter, library_path, logo_folder, logo, icon)
         self.clipping_space = (0, 0, -1, -2)
 
-    def _load_current_chapter(self, progress_queue=None) -> bool:
+    def _load_current_chapter(self) -> _ty.Generator[int, None, bool]:
         chapter_number_str = str(float(self._chapter))
         tiff_path = os.path.join(self._content_path, "chapters", f"{chapter_number_str}.tiff")
 
         if not os.path.isfile(tiff_path):
             print(f"[TIFF] Chapter TIFF not found at: {tiff_path}")
+            yield 0
             return False
 
         # Clear and prepare cache
@@ -172,9 +180,8 @@ class TiffLibraryProvider(LibraryProvider):
                     output_path = os.path.join(self._current_cache_folder, f"{i+1:03}.jpg")
                     page.save(output_path, format="JPEG")
 
-                    if progress_queue:
-                        progress = int(((i + 1) / total) * 100)
-                        progress_queue.put(progress)
+                    progress = int(((i + 1) / total) * 100)
+                    yield progress
 
         except Exception as e:
             print(f"[TIFF] Failed to read or extract TIFF: {e}")

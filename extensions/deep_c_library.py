@@ -6,6 +6,7 @@ import tempfile
 from datetime import datetime
 
 from PIL import Image
+from PySide6.QtCore import Signal
 
 from modules.ProviderPlugin import CoreProvider, LibraryProvider, ProviderImage, CoreSaver, LibrarySaver
 import typing as _ty
@@ -16,7 +17,7 @@ import ffmpeg
 def encode_chapter(images: list[str], output_path: str, fps: int = 30, crf: int = 0,
                    preset: _ty.Literal["veryslow", "slow", "medium", "fast", "veryfast"] = "veryslow",
                    tune: _ty.Literal["film", "psnr", "animation", "grain", "tune"] = "grain",
-                   progress_queue=None):
+                   progress_signal=None):
     """
     Encode a chapter using a list of images, each displayed for exactly 1 frame.
 
@@ -39,9 +40,10 @@ def encode_chapter(images: list[str], output_path: str, fps: int = 30, crf: int 
             new_image_path = os.path.join(temp_dir, new_image_name)
             shutil.copy(image_path, new_image_path)
 
-            if progress_queue:
+            if progress_signal:
                 percent = 20 + int((i + 1) / len(images) * 20)
-                progress_queue.put(percent)
+                progress_signal.emit(percent)
+                yield  # Yield control
 
         # Create the ffmpeg input pattern based on the copied images
         input_pattern = os.path.join(temp_dir, 'image_%03d.png')
@@ -57,8 +59,9 @@ def encode_chapter(images: list[str], output_path: str, fps: int = 30, crf: int 
             .overwrite_output()
             .run()
         )
-        if progress_queue:
-            progress_queue.put(90)
+        if progress_signal:
+            progress_signal.emit(90)
+            yield  # Yield control
         print(f"Encoded chapter to {output_path}")
     except ffmpeg.Error as e:
         print(f"An error occurred while encoding the chapter: {e.stderr.decode()}")
@@ -124,9 +127,10 @@ class DeepCSaver(LibrarySaver):
     @classmethod
     def save_chapter(cls, provider: CoreProvider, chapter_number: str, chapter_title: str, chapter_img_folder: str,
                      quality_present: _ty.Literal["best_quality", "quality", "size", "smallest_size"],
-                     progress_queue=None) -> bool:
+                     progress_signal: Signal | None = None) -> _ty.Generator[None, None, bool]:
         ret_val = super()._ensure_valid_chapter(provider, chapter_number, chapter_title, chapter_img_folder, quality_present)
         if not ret_val:
+            yield
             return False
         if shutil.which("ffmpeg") is None:
             system = platform.system()
@@ -145,6 +149,7 @@ class DeepCSaver(LibrarySaver):
                        install_help)
             for part in message:
                 print(part)
+            yield
             return False
         chapter_number_str = str(float(chapter_number))
         content_path: str = os.path.join(provider.get_library_path(), cls.curr_uuid)
@@ -175,11 +180,13 @@ class DeepCSaver(LibrarySaver):
             except Exception as e:
                 print(f"Failed to load image {file}: {e}")
 
-            if progress_queue:
+            if progress_signal:
                 percent = 10 + int((idx + 1) / len(image_files) * 5)
-                progress_queue.put(percent)
+                progress_signal.emit(percent)
+                yield  # Yield control
 
         if not images:
+            yield
             return False  # Nothing to save
 
         # Determine common size (crop to smallest WxH)
@@ -222,22 +229,25 @@ class DeepCSaver(LibrarySaver):
                 combined.crop(box).save(out_path)
                 resized_paths.append(out_path)
 
-                if progress_queue:
+                if progress_signal:
                     progress = 15 + int((i + 1) / num_chunks * 5)
-                    progress_queue.put(progress)
+                    progress_signal.emit(progress)
+                    yield  # Yield control
         else:
             resized_paths = []
             for idx, img in enumerate(images):
                 out_path = os.path.join(chapter_folder, f"{idx:03}.png")
                 img.save(out_path)
                 resized_paths.append(out_path)
-                if progress_queue:
+                if progress_signal:
                     progress = 15 + int((idx + 1) / len(images) * 5)
-                    progress_queue.put(progress)
+                    progress_signal.emit(progress)
+                    yield  # Yield control
 
         # Encode chapter video
         settings = cls.quality_settings[quality_present]
-        encode_chapter(resized_paths, output_file, **settings, progress_queue=progress_queue)
+        for _ in encode_chapter(resized_paths, output_file, **settings, progress_signal=progress_signal):
+            yield  # Yield control from encode chapter
 
         # Cleanup original images
         shutil.rmtree(chapter_folder)
@@ -267,7 +277,7 @@ class DeepCSaver(LibrarySaver):
             "title": chapter_title,
             "location": os.path.relpath(output_file, content_path),
             "quality_present": quality_present,
-            "series": provider.get_title(),
+            # "series": provider.get_title(),
             "volume": -1,
             "summary": "",
             "date": {
@@ -299,8 +309,9 @@ class DeepCSaver(LibrarySaver):
 
         with open(data_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
-        if progress_queue is not None:
-            progress_queue.put(100)
+        if progress_signal is not None:
+            progress_signal.emit(100)
+            yield  # Yield control
         return True
 
 
