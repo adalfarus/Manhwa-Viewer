@@ -1,11 +1,7 @@
 from modules.AutoProviderPlugin import AutoProviderPlugin
-from urllib.parse import urlencode, urlunparse, quote_plus
 import requests
 from bs4 import BeautifulSoup
 import os
-import re
-from oaplustools.web.search import Search
-import json
 
 
 class AutoProviderPluginAsuraToon(AutoProviderPlugin):

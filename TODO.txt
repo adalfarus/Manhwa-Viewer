@@ -3,10 +3,7 @@ Todo:
 - Make sure provider image is never wider than window
 - Add open logs button (maybe on the error message?)
 - Search with js too when js enabled
-- Fix zinmanga not working
 - Add more / all js providers
-- Add a general cleanup method to the CoreProvider where shared resources are cleaned up at app-exit
-- Add register_library_name / register_provider_name
 
 Not planned:
 - Make it possible to transfer from one library to another by reusing can use library as can use title as path?
@@ -14,6 +11,12 @@ Not planned:
 - Make library providers compatible with one another? How to solve different provider for different chapters?
 
 Done:
+- Fix restart and config logic
+- Fix not closing properly when using threadpool
+- Make reload chapter wait for tasks to finish
+- Add register_library_name / register_provider_name
+- Add a general cleanup method to the CoreProvider where shared resources are cleaned up at app-exit
+- Fix zinmanga not working
 - Add js provider
 - Fix advanced settings not saving
 - Add ComicBook metadata to libraryprovider metadata

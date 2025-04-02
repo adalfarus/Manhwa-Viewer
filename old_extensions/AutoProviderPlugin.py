@@ -1,11 +1,9 @@
-from oaplustools.data.imagetools import OnlineImage, OfflineImage
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from oaplustools.web.search import Search
+from oaplustools.data import OnlineImage
+from oaplustools import Search
 from urllib.parse import urljoin, urlparse
 from typing import Optional, Union, List
 from requests.sessions import Session
 from abc import ABC, abstractmethod
-from multiprocessing import Pool
 from bs4 import BeautifulSoup
 from queue import Queue
 from PIL import Image
