@@ -1,9 +1,9 @@
 Todo:
-- Add more providers
-- Make sure provider image is never wider than window
-- Add open logs button (maybe on the error message?)
 - Search with js too when js enabled
+- Add open logs button (maybe on the error message?)
+- Add more providers
 - Add more / all js providers
+- Make sure provider image is never wider than window
 
 Not planned:
 - Make it possible to transfer from one library to another by reusing can use library as can use title as path?

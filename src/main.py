@@ -5,34 +5,31 @@ config.check()
 config.setup()
 
 from playwright.sync_api import sync_playwright
-
 playwright_instance = sync_playwright().start()
-from PySide6.QtWidgets import (QApplication, QLabel, QVBoxLayout, QWidget, QMainWindow, QCheckBox, QHBoxLayout,
-                               QScroller, QSpinBox, QPushButton, QGraphicsOpacityEffect, QScrollerProperties, QFrame,
-                               QComboBox, QFormLayout, QLineEdit, QMessageBox, QScrollBar, QGraphicsProxyWidget,
-                               QCheckBox, QToolButton, QFileDialog, QMenu, QInputDialog, QSizePolicy,
-                               QStyleOptionComboBox, QStyle, QDialog, QProgressBar, QDoubleSpinBox, QScrollArea,
-                               QTextEdit)
-from PySide6.QtGui import QDesktopServices, QPixmap, QIcon, QDoubleValidator, QFont, QImage, QPainter, QFontMetrics, \
-    QPaintEvent, QIntValidator
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QRect, QUrl, QSize, Signal, QPoint
-# from PySide6.QtMultimediaWidgets import QVideoWidget
-# from PySide6.QtWebEngineWidgets import QWebEngineView
+
+from PySide6.QtWidgets import (QApplication, QLabel, QVBoxLayout, QWidget, QMainWindow, QHBoxLayout, QScroller,
+                               QSpinBox, QPushButton, QGraphicsOpacityEffect, QScrollerProperties, QFrame, QFormLayout,
+                               QLineEdit, QMessageBox, QScrollBar, QGraphicsProxyWidget, QCheckBox, QToolButton,
+                               QFileDialog, QInputDialog, QSizePolicy)
+from PySide6.QtGui import QDesktopServices, QPixmap, QIcon, QDoubleValidator, QFont, QImage
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QRect, QUrl, QSize
 from PySide6.QtGui import QColor
 
-# from modules.AutoProviderPlugin import AutoProviderPlugin, AutoProviderBaseLike, AutoProviderBaseLike2
 from core.modules.ProviderPlugin import CoreProvider, CoreSaver
-from core.modules.Classes import (CustomProgressDialog, SearchWidget, CustomComboBox, Settings, TargetContainer,
-                             VerticalManagement, AutoProviderManager, AdvancedSettingsDialog, TaskBar, TaskWidget)
+from core.modules.Classes import Settings, AutoProviderManager, CacheManager
 from core.modules.themes import Themes
 from core.modules.IOManager import IOManager
 
+from core.modules.gui import (CustomComboBox, AdvancedSettingsDialog, TransferDialog, TutorialPopup, WaitingDialog,
+                              LibraryEdit)
+from core.modules.gui.tasks import CustomProgressDialog, TaskBar, TaskWidget
+from core.modules.gui.search_widget import SearchWidget
+from core.modules.gui.image_area import TargetContainer, VerticalManagement
+
 from aplustools.io.env import diagnose_shutdown_blockers
 # Apt stuff ( update to newer version )
-from oaplustools.io.loggers import monitor_stdout
 from oaplustools.data.updaters import VersionNumber
 from oaplustools.io.environment import System
-from oaplustools import set_dir_to_ex
 
 from argparse import ArgumentParser
 from traceback import format_exc
@@ -60,668 +57,108 @@ from aplustools.io.qtquick import QQuickMessageBox
 multiprocessing.freeze_support()
 hiddenimports = list(stdlib_list.stdlib_list())
 
-# old_dir = os.getcwd()
-# set_dir_to_ex()
-# os.chdir(os.path.join(os.getcwd(), './_internal'))
-
-
-class LibraryEdit(QComboBox):
-    set_library_name = Signal(tuple)
-    remove_library = Signal(tuple)
-
-    def __init__(self, display_names: bool = True, show_path_end: bool = False, name_template: str = "{name}→", parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.customContextMenuRequested.connect(self._show_context_menu)
-        self._display_names: bool = display_names
-        self.show_path_end: bool = show_path_end
-        self._name_template: str = name_template
-        self._libraries: list[tuple[str, str]] = []
-
-    def set_new_name_template(self, template: str) -> None:
-        self._name_template = template
-
-    def set_lib_name(self, library_path: str, new_name: str) -> None:
-        for index, (name, path) in enumerate(self._libraries):
-            if path == library_path:
-                self._libraries[index] = (new_name, path)
-                self.setItemText(index, f"{self._name_template.format(name=new_name)}{path}")
-                self.setCurrentIndex(index)
-                return  # Exit after updating
-
-    def set_current_library_path(self, library_path: str) -> None:
-        for index, (name, path) in enumerate(self._libraries):
-            if path == library_path:
-                self.setCurrentIndex(index)
-                return
-
-    def add_library_item(self, library_name: str, library_path: str) -> None:
-        if any(p == library_path for _, p in self._libraries):
-            return  # Already exists
-        self._libraries.append((library_name, library_path))
-        if self._display_names:
-            self.addItem(f"{self._name_template.format(name=library_name)}{library_path}")
-        else:
-            self.addItem(library_path)
-        self.setCurrentIndex(len(self._libraries) - 1)
-
-    def clear(self, /) -> None:
-        self._libraries.clear()
-        super().clear()
-
-    def _show_context_menu(self, pos: QPoint) -> None:
-        """Shows the menu with a right-click"""
-        if len(self._libraries) == 0:
-            return
-        menu = QMenu(self)
-        set_name_action = menu.addAction("Set name")
-        remove_action = menu.addAction("Remove")
-        action = menu.exec(self.mapToGlobal(pos))
-        if action == set_name_action:
-            self.set_library_name.emit(self._libraries[self.currentIndex()])
-        elif action == remove_action:
-            idx = self.currentIndex()
-            if 0 <= idx < len(self._libraries):
-                item = self._libraries.pop(idx)
-                self.removeItem(idx)
-                self.remove_library.emit(item)
-
-    def current_library(self) -> tuple[str, str]:
-        if self.currentIndex() == -1:
-            return "", ""
-        return self._libraries[self.currentIndex()]
-
-    def paintEvent(self, event: QPaintEvent):
-        if self.isEditable() or not self.show_path_end:
-            super().paintEvent(event)
-            return
-
-        painter = QPainter(self)
-
-        # Prepare style option
-        option = QStyleOptionComboBox()
-        self.initStyleOption(option)
-
-        # Get the area where the text should be drawn
-        edit_rect = self.style().subControlRect(
-            QStyle.ComplexControl.CC_ComboBox,
-            option,
-            QStyle.SubControl.SC_ComboBoxEditField,
-            self
-        )
-
-        # Get elided text
-        metrics = QFontMetrics(self.font())
-        text = self.currentText()
-        elided = metrics.elidedText(text, Qt.TextElideMode.ElideMiddle, edit_rect.width())
-
-        # Draw full control first (background, arrow, etc.)
-        self.style().drawComplexControl(QStyle.ComplexControl.CC_ComboBox, option, painter, self)
-
-        # Draw elided text manually
-        painter.drawText(edit_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, elided)
-
-
-class TransferDialog(QDialog):
-    def __init__(self, parent: "MainWindow", current_chapter: float = 1.0, chapter_rate: float = 1.0):
-        super().__init__(parent)
-        self.setWindowTitle("Transfer chapter(s) from Provider to Library")
-        self.setFixedWidth(400)
-        self.setModal(True)
-
-        self.chapter_rate = chapter_rate
-        self.transfer_in_progress = False
-
-        self.main_layout = QVBoxLayout(self)
-
-        # Chapter range layout
-        range_layout = QHBoxLayout()
-        self.from_input = QDoubleSpinBox()
-        self.from_input.setRange(0, 9999)
-        self.from_input.setDecimals(2)
-        self.from_input.setSingleStep(chapter_rate)
-        self.from_input.setValue(current_chapter)
-
-        self.to_input = QDoubleSpinBox()
-        self.to_input.setRange(0, 9999)
-        self.to_input.setDecimals(2)
-        self.to_input.setSingleStep(chapter_rate)
-        self.to_input.setValue(current_chapter)
-
-        # Connect validation logic
-        self.from_input.valueChanged.connect(self.sync_to_min)
-        self.to_input.valueChanged.connect(self.sync_from_max)
-
-        range_layout.addWidget(QLabel("Chapter range:"))
-        range_layout.addWidget(self.from_input)
-        range_layout.addWidget(self.to_input)
-        self.main_layout.addLayout(range_layout)
-
-        # Return checkbox
-        self.return_checkbox = QCheckBox("Return to current chapter after finished")
-        self.return_to_chapter = False
-        self.return_checkbox.checkStateChanged.connect(
-            lambda: setattr(self, "return_to_chapter", self.return_checkbox.isChecked())
-        )
-        self.main_layout.addWidget(self.return_checkbox)
-
-        # Quality preset dropdown
-        quality_layout = QHBoxLayout()
-        quality_layout.addWidget(QLabel("Quality preset:"))
-        self.quality_combo = QComboBox()
-        self.quality_combo.addItems([
-            "Best Quality",
-            "Quality",
-            "Size",
-            "Smallest Size"
-        ])
-        quality_layout.addWidget(self.quality_combo)
-        self.main_layout.addLayout(quality_layout)
-
-        # Progress bar
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setVisible(False)
-        self.progress_bar.setTextVisible(False)
-
-        progress_container = QHBoxLayout()
-        progress_container.setContentsMargins(0, 0, 0, 0)
-        self.progress_label = QLabel("0 of 0 chapters transferred")
-        self.progress_label.setVisible(False)
-        progress_container.addWidget(self.progress_bar)
-        progress_container.addWidget(self.progress_label)
-
-        self.main_layout.addLayout(progress_container)
-
-        # Transfer button
-        self.transfer_button = QPushButton("Transfer")
-        self.transfer_button.clicked.connect(self.start_transfer)
-        self.main_layout.addWidget(self.transfer_button)
-
-    def sync_to_min(self, from_val: float):
-        to_val = self.to_input.value()
-        if from_val > to_val or not self._is_multiple(to_val - from_val):
-            steps = max(0, round((to_val - from_val) / self.chapter_rate))
-            new_to = from_val + steps * self.chapter_rate
-            self.to_input.blockSignals(True)
-            self.to_input.setValue(round(new_to, 2))
-            self.to_input.blockSignals(False)
-
-    def sync_from_max(self, to_val: float):
-        from_val = self.from_input.value()
-        if to_val < from_val or not self._is_multiple(to_val - from_val):
-            steps = max(0, round((to_val - from_val) / self.chapter_rate))
-            new_from = to_val - steps * self.chapter_rate
-            self.from_input.blockSignals(True)
-            self.from_input.setValue(round(new_from, 2))
-            self.from_input.blockSignals(False)
-
-    def _is_multiple(self, diff: float) -> bool:
-        return abs((diff / self.chapter_rate) - round(diff / self.chapter_rate)) < 1e-6
-
-    def start_transfer(self):
-        from_val = self.from_input.value()
-        to_val = self.to_input.value()
-
-        if self.parent().library_edit.current_library()[1] == "":
-            QMessageBox.warning(self, "No library selected", "Please select a library to enable \nthe transfer of chapters.")
-            return
-
-        self.transfer_in_progress = True
-
-        self.from_input.setEnabled(False)
-        self.to_input.setEnabled(False)
-        self.quality_combo.setEnabled(False)
-        self.transfer_button.setEnabled(False)
-
-        self.progress_bar.setVisible(True)
-        self.progress_label.setVisible(True)
-        self.progress_bar.setValue(0)
-
-        self.transfer_chapters(from_val, to_val)
-
-    def transfer_chapters(self, from_val: float, to_val: float):
-        chapter_rate = self.chapter_rate
-
-        self.quality_preset = self.quality_combo.currentText().lower().replace(" ", "_")
-
-        num_chapters = int(round((to_val - from_val) / chapter_rate)) + 1
-        self.total_chapters = num_chapters
-        self.current_index = 0
-        self.progress_label.setText(f"{self.current_index} of {self.total_chapters} chapters transferred")
-        self.chapter_list = [round(from_val + i * chapter_rate, 2) for i in range(num_chapters)]
-        self.first_chapter = True
-
-        # if float(self.parent().chapter_selector.text()) != from_val:
-        #     self.parent().reset_caches()
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.transfer_next_chapter)
-        self.timer.start(10)
-
-    def transfer_next_chapter(self):
-        if self.current_index >= len(self.chapter_list):
-            self.timer.stop()
-            self.finish_transfer()
-            return
-
-        chapter = self.chapter_list[self.current_index]
-        self.current_index += 1
-
-        parent = self.parent()
-        # if self.first_chapter:
-        #     self.first_chapter = False
-        # else:
-        #     parent.advance_cache()
-        if parent:
-            parent.chapter_selector.setText(str(chapter))
-            parent.set_chapter()
-            parent.ensure_loaded_chapter()
-            args = (
-                parent.provider,
-                chapter,
-                f"Chapter {chapter}",
-                parent.cache_manager.get_cache_folder(chapter),
-                self.quality_preset
-            )
-            kwargs = {}
-            progress_dialog = CustomProgressDialog(
-                parent=self,
-                window_title="Transferring ...",
-                window_label="Doing a task...",
-                button_text="Cancel",
-                new_thread=True,
-                func=parent.saver.save_chapter,
-                args=args,
-                kwargs=kwargs)
-            progress_dialog.exec()
-
-            print("Transfer Task: ", progress_dialog.task_successful)
-            if not progress_dialog.task_successful:
-                QMessageBox.information(self, "Info", "Transferring of the chapter has failed!\nLook in the logs for more info.",
-                                        QMessageBox.StandardButton.Ok,
-                                        QMessageBox.StandardButton.Ok)
-
-        progress = int((self.current_index / self.total_chapters) * 100)
-        self.progress_bar.setValue(progress)
-        self.progress_label.setText(f"{self.current_index} of {self.total_chapters} chapters transferred")
-
-    def finish_transfer(self):
-        self.transfer_in_progress = False
-
-        self.accept()
-
-        QMessageBox.information(
-            self,
-            "Transfer Complete",
-            f"Transfer of chapter {self.chapter_list[0]:.2f}–{self.chapter_list[-1]:.2f} done.",
-            QMessageBox.Ok
-        )
-
-    def closeEvent(self, event):
-        if self.transfer_in_progress:
-            event.ignore()
-        else:
-            event.accept()
-
-
-class CacheManager:
-    def __init__(self, base_cache_folder: str) -> None:
-        self.base_cache_folder = base_cache_folder
-        os.makedirs(self.base_cache_folder, exist_ok=True)
-
-    def get_cache_folder(self, chapter: float) -> str:
-        folder: str = os.path.join(self.base_cache_folder, str(float(chapter)))
-        if not os.path.exists(folder):
-            os.makedirs(folder, exist_ok=True)
-        return folder
-
-    def is_cache_loaded(self, folder: str) -> bool:
-        return os.path.isdir(folder) and len(os.listdir(folder)) > 0
-
-    def clear_cache(self, folder: str) -> None:
-        self._clear_folder(folder)
-
-    def clear_all_caches(self) -> None:
-        for folder in os.listdir(self.base_cache_folder):
-            path = os.path.join(self.base_cache_folder, folder)
-            self._clear_folder(path)
-
-    def get_cached_chapters(self) -> list[float]:
-        chapters = []
-        for folder in os.listdir(self.base_cache_folder):
-            try:
-                chapters.append(float(folder))
-            except ValueError:
-                continue  # Ignore non-chapter folders
-        return sorted(chapters)
-
-    def ensure_less_than(self, n: int, current: int) -> None:
-        if n == -1:
-            return
-
-        chapters = self.get_cached_chapters()
-        if len(chapters) <= n:
-            return
-
-        # Sort chapters by distance from current
-        chapters.sort(key=lambda x: abs(x - current), reverse=True)
-
-        # Chapters to remove
-        excess = chapters[n:]
-
-        for chapter in excess:
-            folder = os.path.join(self.base_cache_folder, str(float(chapter)))
-            self._clear_folder(folder)
-
-    def _clear_folder(self, folder: str):
-        if os.path.exists(folder):
-            shutil.rmtree(folder)
-
-
-class WaitingDialog(QDialog):
-    def __init__(self, parent=None, message="Waiting for all tasks to finish..."):
-        super().__init__(parent)
-        self.setWindowTitle("Info")
-        self.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
-        self.setModal(True)
-
-        layout = QVBoxLayout(self)
-        label = QLabel(message, self)
-        label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(label)
-
-        self.setFixedSize(300, 100)
-
-
-class TutorialPopup(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent=parent)
-        self.setWindowTitle("Tutorial")
-
-        layout = QVBoxLayout()
-        self.setLayout(layout)
-
-        self.text_edit = QTextEdit()
-        self.text_edit.setReadOnly(True)
-        self.text_edit.setHtml("""
-<h1>Welcome to the Tutorial</h1>
-<p>Scroll down to explore features and controls of the app.</p>
-<hr>
-
-<h2>📂 Basic Navigation</h2>
-<p>➡️ On the <b>right</b>, you'll find the <b>Side Menu</b>:</p>
-
-<ul>
-  <li><b>Comic Provider:</b> where your images come from
-    <ul>
-      <li>⚫ Grayed-out = temporarily unavailable (e.g., site is down)</li>
-      <li>❌ Not shown = unsupported (e.g., JS-loaded images)</li>
-      <li>📚 For library providers, make sure the matching library manager is selected</li>
-    </ul>
-  </li>
-  <li><b>Library Manager:</b> controls how chapters are stored</li>
-  <ul>
-    <li><b>Comic Book:</b> supports CBZ/CBR/CB7/CBT, writes CBZ. Resizes images based on quality level (100%, 75%, 50%, 25%)</li>
-    <li><b>DeepC:</b> saves images as videos using ffmpeg (needs ffmpeg installed + on PATH)</li>
-    <li><b>Std:</b> saves plain folders of images. Resizes images based on quality level (100%, 75%, 50%, 25%)</li>
-    <li><b>Tiff:</b> uses TIFF format. Size per chapter depends on compression:<br>
-      - Uncompressed ~300MB<br>
-      - LZW ~200MB<br>
-      - Deflate ~80MB<br>
-      - JPEG-compressed ~30MB</li>
-    <li><b>WebP:</b> stores .webp files, with quality settings: 50, 30, 10, 0 (100 = lossless)</li>
-  </ul>
-  <li><b>Chapter Settings:</b> title, number, and chapter increment rate</li>
-  <li><b>Library:</b> where files are saved. Click the tool icon to add new ones</li>
-</ul>
-
-<h2>➡️ Navigation Buttons:</h2>
-<ul>
-  <li>⬅️ Previous / ➡️ Next chapter</li>
-  <li>🔄 Re-download (clears cache & reloads from provider)</li>
-  <li>♻️ Re-load app (resets GUI & backend. Double-click = resets window size & pos)</li>
-</ul>
-
-<h2>🛠 UI Options</h2>
-<ul>
-  <li>🏷 Provider logo toggle (top-left)</li>
-  <li>🔍 Search All — triggers search across all searchable providers</li>
-  <li>✨ Hover Effects</li>
-  <li>🧱 Borderless Mode</li>
-  <li>💧 Acrylic Menus + Background</li>
-  <li>📐 Downscale / Upscale toggles</li>
-  <li>🔃 Lazy Loading (can improve large image scroll)</li>
-  <li>📏 Manual Width: base width of images</li>
-  <li>🚫 Hide Titlebar / Scrollbar</li>
-  <li>📌 Stay on Top (but popups may appear behind)</li>
-  <li>🎚 Sensitivity Slider (controls scroll intensity: 100%, 1000%, 10000%)</li>
-  <li>💾 Save Last Title</li>
-  <li>📤 Transfer Chapter(s)</li>
-  <li>⚙️ Advanced Settings</li>
-</ul>
-
-<h2>🔎 Search Bar</h2>
-<p>Located at the <b>top</b> of the window:</p>
-<ul>
-  <li>Search the active provider (if supported)</li>
-  <li>Press <b>Enter</b> or click the search icon</li>
-  <li>If the search bar has a <b>gold border</b>, Search All is active</li>
-</ul>
-
-<h2>⚙️ Advanced Settings Overview</h2>
-<ul>
-  <li>🕘 Recent Titles (if enabled)</li>
-  <li>🎨 Styling (themes & fonts)</li>
-  <li>🧳 Settings Export/Import (optional)</li>
-  <li>📦 Chapter Management (cache & transfer)</li>
-</ul>
-        """)
-        # content.setHtml("""
-        #     <h1>Welcome to the Tutorial</h1>
-        #     <p>Scroll to explore features:</p>
-        #     <hr>
-        #     <p><b>Basic navigation</b>:</p>
-        #     <p>- On the right you have the <b>Side-Menu</b>, here you can select the: </p>
-        #     <p>   > Comic provider (where the images come from)</p>
-        #     <p>      > If a provider currently does not work, it is grayed out (e.g. the website is down)</p>
-        #     <p>      > If a provider can't work, it is not included in the list (e.g. using javascript to load images)</p>
-        #     <p>      > If you select a library provider, you also need to use the corresponding library manager (otherwise it won't know what to search, ...)</p>
-        #     <p>   > Library manager (to manage the saved images)</p>
-        #     <p>      > If the currently select library isn't supported, it is deselected and you won't be able to select it again</p>
-        #     <p>      > There are several default library managers included: </p>
-        #     <p>         > Comic Book library (can read CBZ, CBR, CB7 and CBT, will write CBZ. Quality will resize the images to 100%, 75%, 50% and 25% respectively)</p>
-        #     <p>         > DeepC library (uses ffmpeg binaries to encode chapter images into videos to enable massive space savings while preserving quality, needs ffmpeg to be installed on your system and be accessible through your PATH)</p>
-        #     <p>         > Std library (will just save the plain images within a folder. Quality will resize the images to 100%, 75%, 50% and 25% respectively)</p>
-        #     <p>         > Tiff library (uses the tiff file format, tuned for maximum quality but large files. Quality will change compression modes to uncompressed ~300mb per chapter, lossless compressed 200mb per chapter, good compression 80mb per chapter, jpeg lossy compression 30mb per chapter)</p>
-        #     <p>         > WebP library (will save all images as .webp. Quality changes the quality attribute of the images, they are 50, 30, 10 and 0 with 100 being lossless and 0 being the worst)</p>
-        #     <p>   > Title and chapter</p>
-        #     <p>   > Chapter rate (how much the chapter is increased for every time you click next)</p>
-        #     <p>   > Library (where the images are saved, click the tool button next to it to add a library. A library may not be compatible with all library managers.)</p>
-        #     <p>   > Navigation buttons:</p>
-        #     <p>      > Previous and next</p>
-        #     <p>      > Re-download chapter (clears the caches and re gets the chapter from the provider)</p>
-        #     <p>      > Re-load the app (reloads all gui and backend components of the app, clicking it twice within one second will also reset window position and size)</p>
-        #     <p>   > Provider logo checkbox (this dis or enables the transparent provider logo in the top left)</p>
-        #     <p>   > Search all button (this will search all providers that are capable of searching and display the first two results for each. This effect is active for as long as the search bar remains circled with gold)</p>
-        #     <p>   > Hover effect all checkbox (adds a hover effect to all gui elements, sometimes bugged)</p>
-        #     <p>   > Borderless checkbox (removes border between image area and window edge)</p>
-        #     <p>   > Acrylic menus checkbox (makes all menus transparent)</p>
-        #     <p>   > Acrylic background checkbox (makes the app background transparent)</p>
-        #     <p>   > Downscale if larger than window checkbox (images that are larger than the window are downscaled to the window size)</p>
-        #     <p>   > Upscale if smaller than window checkbox (images that are smaller than the window are upscaled to the window size)</p>
-        #     <p>   > LL checkbox (enables or disabled lazy loading of images, may or may not make the experience better depending on the image dimensions)</p>
-        #     <p>   > Manual width spinbox (sets the base width of all images, that means if the images aren't modied by down- or upscaling, what width should they have)</p>
-        #     <p>   > Hide titlebar checkbox (hides the windows titlebar)</p>
-        #     <p>   > Hide scrollbar checkbox (hides the image areas scrollbars)</p>
-        #     <p>   > Stay on top checkbox (makes the window stay on top of all other windows, sadly popups will appear behind it)</p>
-        #     <p>   > Current sensitivity slider (the current sensitivity of the image area, normal scroll = 100%, scrollbar scroll = 1000%, scrollbar click = 10000%)</p>
-        #     <p>   > Save last titles checkbox (if the app should save the last titles + chapter + provider you've selected)</p>
-        #     <p>   > Transfer chapter(s) (opens chapter transfer dialog, from the provider to the library)</p>
-        #     <p>   > Adv settings (opens advanced settings dialog)</p>
-        #     <p>- On the top you have the <b>Search-Bar</b></p>
-        #     <p>   > Here you can search the provider, if it is supported</p>
-        #     <p>   > Press [ENTER] or the search button to initiate the search</p>
-        #     <p>   > If you've clicked the search all button, the search bar will have a golden border as long as you don't click away. This means it will search all providers.</p>
-        #     <p><b>Advanced settings</b> are ... into several sections:</p>
-        #     <p>- Recent titles (recent titles saved if the recent titles checkbox is checked)</p>
-        #     <p>- Styling (here you can select different themes and fonts)</p>
-        #     <p>- Settings file handling (not really necessary to use anymore, lets you export and import settings for the app)</p>
-        #     <p>- Chapter management settings (transfer and cache settings)</p>
-        #
-        #     <p><b>Basic navigation</b>:</p>
-        #     <p><b>25%</b>: Side menu usage and keyboard shortcuts.</p>
-        #     <p><b>50%</b>: Library settings and import/export.</p>
-        #     <p><b>75%</b>: Image formats and custom savers.</p>
-        #     <p><b>100%</b>: You're ready to go!</p>
-        # """)
-        self.text_edit.setMaximumHeight(600)
-
-        layout.addWidget(self.text_edit)
-
-        # Checkbox + OK button
-        self.checkbox = QCheckBox("Do not show again")
-        layout.addWidget(self.checkbox)
-
-        ok_button = QPushButton("Ok")
-        ok_button.clicked.connect(self.accept)
-        layout.addWidget(ok_button)
-
-        self.text_edit.verticalScrollBar().valueChanged.connect(self.on_scroll)
-        self.menu_opened = False
-
-    def on_scroll(self):
-        scrollbar = self.text_edit.verticalScrollBar()
-        max_scroll = scrollbar.maximum()
-        current = scrollbar.value()
-        progress = current / max_scroll if max_scroll > 0 else 0.0
-        self._on_tutorial_scroll(progress)
-
-    def _on_tutorial_scroll(self, progress: float) -> None:
-        parent = self.parent()
-
-        if (0.1 <= progress < 0.9 or progress == 1.0) and not getattr(self, "menu_opened", False):
-            self.menu_opened = True
-            parent.toggle_side_menu()
-        elif progress > 0.9 and progress != 1.0 and getattr(self, "menu_opened", False):
-            self.menu_opened = False
-            parent.toggle_side_menu()
-        if 0.8 <= progress < 0.99 and not getattr(self, "search_bar_shown", False):
-            self.search_bar_shown = True
-            parent.toggle_search_bar()
-        elif progress > 0.99 and getattr(self, "search_bar_shown", False):
-            self.search_bar_shown = False
-            parent.toggle_search_bar()
-        if progress >= 0.9 and not getattr(self, "search_highlight_triggered", False):
-            self.search_highlight_triggered = True
-            parent.search_all()
-        if progress == 1.0 and not getattr(self, "advanced", False):
-            self.advanced = True
-            parent.advanced_settings(blocking=False)
-            self.raise_()
-        # reset if scrolling back up
-        if progress < 0.9:
-            self.search_highlight_triggered = False
-        # print(f"Tutorial scroll progress: {progress:.2f}")
-
 
 class MainWindow(QMainWindow):
     def __init__(self, app: QApplication, input_path: str, logging_level: int | None = None) -> None:
-        super().__init__()  # TODO: Try except init
-        self.app = app
-        self.transferring = False
+        try:
+            super().__init__()
+            self.app = app
+            self.transferring = False
 
-        self.data_folder = os.path.abspath("data").strip("/")
-        self.caches_folder = os.path.abspath("caches").strip("/")
-        self.modules_folder = os.path.abspath(f"{config.VERSION}{config.VERSION_ADD}/core/modules").strip("/")
-        self.extensions_folder = os.path.abspath(f"{config.VERSION}{config.VERSION_ADD}/extensions").strip("/")
+            self.data_folder = os.path.abspath("data").strip("/")
+            self.caches_folder = os.path.abspath("caches").strip("/")
+            self.modules_folder = os.path.abspath(f"{config.VERSION}{config.VERSION_ADD}/core/modules").strip("/")
+            self.extensions_folder = os.path.abspath(f"{config.VERSION}{config.VERSION_ADD}/extensions").strip("/")
 
-        self.cache_manager: CacheManager = CacheManager(self.caches_folder)
+            self.cache_manager: CacheManager = CacheManager(self.caches_folder)
 
-        for folder in (self.data_folder, self.modules_folder, self.extensions_folder):
-            os.makedirs(folder, exist_ok=True)
+            for folder in (self.data_folder, self.modules_folder, self.extensions_folder):
+                os.makedirs(folder, exist_ok=True)
 
-        # Setup IOManager
-        self.io_manager: IOManager = IOManager()
-        self.io_manager.init(self.button_popup, f"{self.data_folder}/logs", config.INDEV)
-        if logging_level:
-            mode = getattr(logging, logging.getLevelName(logging_level).upper())
-        else:
-            mode = logging.INFO
-        if mode is not None:
-            self.io_manager.set_logging_level(mode)
-        for exported_line in config.exported_logs.split("\n"):
-            self.io_manager.debug(exported_line)  # Flush config prints
-        self.system = System()
+            # Setup IOManager
+            self.io_manager: IOManager = IOManager()
+            self.io_manager.init(self.button_popup, f"{self.data_folder}/logs", config.INDEV)
+            if logging_level:
+                mode = getattr(logging, logging.getLevelName(logging_level).upper())
+            else:
+                mode = logging.INFO
+            if mode is not None:
+                self.io_manager.set_logging_level(mode)
+            for exported_line in config.exported_logs.split("\n"):
+                self.io_manager.debug(exported_line)  # Flush config prints
+            self.system = System()
 
-        self.setWindowTitle(f"Super Manhwa Viewer {str(config.VERSION) + config.VERSION_ADD}")
-        self.setWindowIcon(QIcon(f"{self.data_folder}/Untitled-1-noBackground.png"))
+            self.setWindowTitle(f"Super Manhwa Viewer {str(config.VERSION) + config.VERSION_ADD}")
+            self.abs_window_icon_path: str = f"{self.data_folder}/Untitled-1-noBackground.png"
+            self.setWindowIcon(QIcon(self.abs_window_icon_path))
 
-        db_path = f"{self.data_folder}/data.db"
+            db_path = f"{self.data_folder}/data.db"
 
-        if int(self.system.get_major_os_version()) <= 10:
-            self.settings = Settings(db_path, {"geometry": "100, 100, 800, 630", "advanced_settings": '{"recent_titles": [], "themes": {"light": "light", "dark": "dark", "font": "Segoe UI"}, "settings_file_path": "", "settings_file_mode": "overwrite", "misc": {"auto_export": false, "num_workers": 10}}',}, self.export_settings)
-        else:
-            self.settings = Settings(db_path, {"geometry": "100, 100, 800, 630"}, self.export_settings)
-        # self.settings.set_geometry([100, 100, 800, 630])
+            if int(self.system.get_major_os_version()) <= 10:
+                self.settings = Settings(db_path, {"geometry": "100, 100, 800, 630", "advanced_settings": '{"recent_titles": [], "themes": {"light": "light", "dark": "dark", "font": "Segoe UI"}, "settings_file_path": "", "settings_file_mode": "overwrite", "misc": {"auto_export": false, "num_workers": 10}}',}, self.export_settings)
+            else:
+                self.settings = Settings(db_path, {"geometry": "100, 100, 800, 630"}, self.export_settings)
+            # self.settings.set_geometry([100, 100, 800, 630])
 
-        self.os_theme = self.system.get_windows_theme() or os.environ.get('MV_THEME') or "light"
-        self.theme = None
-        x, y, height, width = self.settings.get_geometry()
-        self.setGeometry(x, y + 31, height, width)  # Somehow saves it as 31 pixels less
-        self.setup_gui()
-        if os.path.isdir(input_path):
-            self.library_edit.add_library_item(os.path.basename(input_path), input_path)
-        self.update_theme(self.os_theme.lower())
+            self.os_theme = self.system.get_windows_theme() or os.environ.get('MV_THEME') or "light"
+            self.theme = None
+            x, y, height, width = self.settings.get_geometry()
+            self.setGeometry(x, y + 31, height, width)  # Somehow saves it as 31 pixels less
+            self.setup_gui()
+            if os.path.isdir(input_path):
+                self.library_edit.add_library_item(os.path.basename(input_path), input_path)
+            self.update_theme(self.os_theme.lower())
 
-        # Advanced setup
-        self.provider = None
-        self.provider_list: list[CoreProvider] = []
-        self.saver_list: list[CoreSaver] = []
-        self.provider_combobox.currentIndexChanged.disconnect()
-        self.known_working_searchers = []
-        self.reload_providers()
-        self.switch_provider(self.settings.get_provider_id())
-        self.provider_combobox.currentIndexChanged.connect(self.change_provider)
+            # Advanced setup
+            self.provider = None
+            self.provider_list: list[CoreProvider] = []
+            self.saver_list: list[CoreSaver] = []
+            self.provider_combobox.currentIndexChanged.disconnect()
+            self.known_working_searchers = []
+            self.reload_providers()
+            self.switch_provider(self.settings.get_provider_id())
+            self.provider_combobox.currentIndexChanged.connect(self.change_provider)
 
-        self.reload_window_title()
+            self.reload_window_title()
 
-        # Scaling stuff
-        self.content_paths = self.get_content_paths()
-        self.task_successful = False
-        self.threading = False
-        self.gui_changing = False  # So we don't clear caches if the gui is changing
+            # Scaling stuff
+            self.content_paths = self.get_content_paths()
+            self.task_successful = False
+            self.threading = False
+            self.gui_changing = False  # So we don't clear caches if the gui is changing
 
-        self.reload_gui()
+            self.reload_gui()
 
-        if not self.hover_effect_all_checkbox.isChecked():
-            self.reload_hover_effect_all_setting()
-            self.reload_acrylic_menus_setting(callback=True)
-        else:
-            self.reload_hover_effect_all_setting()
-            self.reload_acrylic_menus_setting()
-        self.reload_borderless_setting()
-        self.reload_acrylic_background_setting()
+            if not self.hover_effect_all_checkbox.isChecked():
+                self.reload_hover_effect_all_setting()
+                self.reload_acrylic_menus_setting(callback=True)
+            else:
+                self.reload_hover_effect_all_setting()
+                self.reload_acrylic_menus_setting()
+            self.reload_borderless_setting()
+            self.reload_acrylic_background_setting()
 
-        self.reload_hide_titlebar_setting()
-        self.reload_hide_scrollbar_setting()
-        self.reload_stay_on_top_setting()
+            self.reload_hide_titlebar_setting()
+            self.reload_hide_scrollbar_setting()
+            self.reload_stay_on_top_setting()
 
-        self.update_sensitivity(int(self.settings.get_scrolling_sensitivity() * 10))
+            self.update_sensitivity(int(self.settings.get_scrolling_sensitivity() * 10))
 
-        self.content_widgets = []
-        self.reload_content()
-        QTimer.singleShot(50, lambda: (
-            self.scrollarea.verticalScrollBar().setValue(self.settings.get_last_scroll_positions()[0]),
-            self.scrollarea.horizontalScrollBar().setValue(self.settings.get_last_scroll_positions()[1]),
-            self.scrollarea._onScroll()
-        ))
+            self.content_widgets = []
+            self.reload_content()
+            QTimer.singleShot(50, lambda: (
+                self.scrollarea.verticalScrollBar().setValue(self.settings.get_last_scroll_positions()[0]),
+                self.scrollarea.horizontalScrollBar().setValue(self.settings.get_last_scroll_positions()[1]),
+                self.scrollarea._onScroll()
+            ))
 
-        self.show()
-        self.check_for_update()
-        self.show_tutorial()
-        self.last_reload_ts = time.time()
+            self.show()
+            self.check_for_update()
+            self.show_tutorial()
+            self.last_reload_ts = time.time()
+        except Exception as e:
+            self.close()
+            raise Exception("Exception occurred during initialization of the Main class") from e
 
     def button_popup(self, title: str, text: str, description: str,
                      icon: _ty.Literal["Information", "Critical", "Question", "Warning", "NoIcon"],
