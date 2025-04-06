@@ -1,10 +1,11 @@
 """TBA"""
-from PySide6.QtWidgets import (QListWidget, QDialog, QStyledItemDelegate, QComboBox, QGroupBox, QVBoxLayout, QFormLayout,
+from PySide6.QtWidgets import (QListWidget, QDialog, QStyledItemDelegate, QComboBox, QGroupBox, QVBoxLayout,
+                               QFormLayout,
                                QFontComboBox, QLabel, QLineEdit, QToolButton, QHBoxLayout, QRadioButton, QPushButton,
                                QCheckBox, QSpinBox, QDialogButtonBox, QListWidgetItem, QWidget, QFileDialog, QMenu,
                                QStyleOptionComboBox, QStyle, QDoubleSpinBox, QProgressBar, QSizePolicy, QMessageBox,
-                               QTextEdit)
-from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QByteArray, Qt, QTimer, Signal, QPoint
+                               QTextEdit, QLayout, QLayoutItem, QScrollArea, QFrame)
+from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QByteArray, Qt, QTimer, Signal, QPoint, QSize, QRect
 from PySide6.QtGui import QWheelEvent, QFont, QPaintEvent, QPainter, QFontMetrics
 
 from .tasks import CustomProgressDialog
@@ -14,6 +15,194 @@ import shutil
 import json
 import os
 
+
+class QFlowLayout(QLayout):  # Not by me
+    """
+    A custom flow layout class that arranges child widgets horizontally and wraps as needed.
+    """
+
+    def __init__(self, parent=None, margin=0, hSpacing=6, vSpacing=6):
+        super().__init__(parent)
+        self.setContentsMargins(margin, margin, margin, margin)
+        self.hSpacing = hSpacing
+        self.vSpacing = vSpacing
+        self.items = []
+
+    def addItem(self, item):
+        self.items.append(item)
+
+    def horizontalSpacing(self) -> int:
+        return self.hSpacing
+
+    def verticalSpacing(self) -> int:
+        return self.vSpacing
+
+    def count(self) -> int:
+        return len(self.items)
+
+    def itemAt(self, index) -> QLayoutItem:
+        if 0 <= index < len(self.items):
+            return self.items[index]
+        return None
+
+    def takeAt(self, index) -> QLayoutItem:
+        if 0 <= index < len(self.items):
+            return self.items.pop(index)
+        return None
+
+    def expandingDirections(self) -> Qt.Orientations:
+        return Qt.Horizontal | Qt.Vertical
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self.doLayout(QRect(0, 0, width, 0), testOnly=True)
+
+    def setGeometry(self, rect: QRect):
+        super().setGeometry(rect)
+        self.doLayout(rect, testOnly=False)
+
+    def expandingDirections(self) -> Qt.Orientations:
+        """Prevents unnecessary expansion by keeping the layout compact."""
+        return Qt.Orientation(0)  # Prevents expanding horizontally/vertically
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        """Calculate the layout height based on the available width."""
+        return self.doLayout(QRect(0, 0, width, 0), testOnly=True)
+
+    def sizeHint(self) -> QSize:
+        """Return the preferred size of the layout."""
+        return self.calculateSize()
+
+    def minimumSize(self) -> QSize:
+        """Return the minimum size of the layout."""
+        return self.calculateSize()
+
+    def calculateSize(self) -> QSize:
+        size = QSize()
+        for item in self.items:
+            size = size.expandedTo(item.minimumSize())
+        size += QSize(2 * self.contentsMargins().top(), 2 * self.contentsMargins().top())
+        return size
+
+    def doLayout(self, rect: QRect, testOnly: bool) -> int:
+        x, y, lineHeight = rect.x(), rect.y(), 0
+
+        for item in self.items:
+            wid = item.widget()
+            spaceX, spaceY = self.horizontalSpacing(), self.verticalSpacing()
+            nextX = x + item.sizeHint().width() + spaceX
+            if nextX - spaceX > rect.right() and lineHeight > 0:
+                x = rect.x()
+                y += lineHeight + spaceY
+                nextX = x + item.sizeHint().width() + spaceX
+                lineHeight = 0
+
+            if not testOnly:
+                item.setGeometry(QRect(QPoint(x, y), item.sizeHint()))
+
+            x = nextX
+            lineHeight = max(lineHeight, item.sizeHint().height())
+
+        return y + lineHeight - rect.y()
+
+
+class QLabelSelector(QWidget):
+    pill_added_signal = Signal(list)  # Signal of all current pills
+
+    def __init__(self, parent: QWidget | None = None, position_label_bar_at_top: bool = False) -> None:
+        super().__init__(parent=parent)
+        self._available_labels: list[str] = []
+
+        main_layout = QVBoxLayout(self)
+        # Top: Available labels
+        self.label_bar = QFlowLayout()
+        label_bar_scroll = QScrollArea()
+        label_bar_scroll.setWidgetResizable(True)
+        label_bar_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        label_bar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        label_bar_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # label_bar_scroll.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum)
+        label_bar_content = QWidget()
+        label_bar_content.setLayout(self.label_bar)
+        label_bar_scroll.setWidget(label_bar_content)
+        if position_label_bar_at_top:
+            main_layout.addWidget(label_bar_scroll)
+
+        # Scrollable flow layout
+        pill_scroll = QScrollArea()
+        pill_scroll.setWidgetResizable(True)
+        pill_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        pill_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        pill_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # pill_scroll.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.MinimumExpanding)
+
+        pill_content = QWidget()
+        self.pill_layout = QFlowLayout()
+        pill_content.setLayout(self.pill_layout)
+        pill_scroll.setWidget(pill_content)
+        main_layout.addWidget(pill_scroll)
+        if not position_label_bar_at_top:
+            main_layout.addWidget(label_bar_scroll)
+
+    def set_available_labels(self, labels: list[str]) -> None:
+        self._available_labels = labels
+        while self.label_bar.count():  # Clear current buttons
+            item = self.label_bar.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+        for name in labels:  # Add new ones
+            btn = QPushButton(name)
+            btn.clicked.connect(lambda _, n=name: self._add_pill(n))
+            self.label_bar.addWidget(btn)
+
+    def _remove_pill(self, tag_frame: QFrame) -> None:
+        tag_frame.setParent(None)
+        tag_frame.deleteLater()
+        self.pill_added_signal.emit(self.get_current_pills())
+
+    def _add_pill(self, name: str) -> None:
+        tag_label = QLabel(name)
+        tag_xbutton = QPushButton("✕")
+        tag_layout = QHBoxLayout()
+        tag_layout.setContentsMargins(3, 3, 3, 3)
+        tag_layout.addWidget(tag_label)
+        tag_layout.addWidget(tag_xbutton)
+        tag_frame = QFrame()
+        tag_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        tag_frame.setStyleSheet("background-color: #d0d0d0; border-radius: 6px;")
+        tag_frame.setLayout(tag_layout)
+        tag_frame.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.MinimumExpanding)
+
+        tag_xbutton.clicked.connect(lambda: self._remove_pill(tag_frame))
+        self.pill_layout.addWidget(tag_frame)
+        self.pill_added_signal.emit(self.get_current_pills())
+
+    def get_current_pills(self) -> list[str]:
+        pills: list[str] = []
+        for i in range(self.pill_layout.count()):
+            item = self.pill_layout.itemAt(i)
+            widget = item.widget()
+            if widget:
+                label = widget.findChild(QLabel)
+                if label:
+                    pills.append(label.text())
+        return pills
+
+    def set_current_pills(self, pills: list[str]) -> None:
+        valid_pills = [p for p in pills if p in self._available_labels]
+        while self.pill_layout.count():  # Clear current
+            item = self.pill_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+        for name in valid_pills:  # Add new ones
+            self._add_pill(name)
 
 
 class QSmoothScrollingList(QListWidget):
@@ -70,7 +259,7 @@ class AdvancedSettingsDialog(QDialog):
                                      "themes": {"light": "light_light", "dark": "dark", "font": "Segoe UI"},
                                      "settings_file_path": "",
                                      "settings_file_mode": "overwrite",
-                                     "misc": {"auto_export": False, "quality_preset": "quality", "max_cached_chapters": -1}}
+                                     "misc": {"auto_export": False, "quality_preset": "quality", "max_cached_chapters": -1, "image_processing_pipeline": []}}
         else:
             self.default_settings = default_settings
         if current_settings is None:
@@ -85,7 +274,7 @@ class AdvancedSettingsDialog(QDialog):
         self.available_themes = tuple(self._format_theme_name(theme_name) for theme_name in available_themes)
 
         self.setWindowTitle("Advanced Settings")
-        self.resize(600, 300)
+        self.setMinimumWidth(800)
 
         self.mainLayout = QVBoxLayout()
         self.setLayout(self.mainLayout)
@@ -114,36 +303,36 @@ class AdvancedSettingsDialog(QDialog):
         self.mainLayout.addWidget(self.themeGroupBox)
 
         # Settings File Handling
-        self.fileHandlingGroupBox = QGroupBox("Settings File Handling", self)
-        self.fileHandlingLayout = QVBoxLayout(self.fileHandlingGroupBox)
-        self.fileLocationLineEdit = QLineEdit(self.fileHandlingGroupBox)
-        self.fileLocationLineEdit.setPlaceholderText("File Location")
-        self.fileLocationToolButton = QToolButton(self.fileHandlingGroupBox)
-        self.fileLocationToolButton.setText("...")
-        self.fileLocationToolButton.clicked.connect(self.get_file_location)
-        self.fileLocationLayout = QHBoxLayout()
-        self.fileLocationLayout.addWidget(self.fileLocationLineEdit)
-        self.fileLocationLayout.addWidget(self.fileLocationToolButton)
-        self.overwriteRadioButton = QRadioButton("Overwrite", self.fileHandlingGroupBox)
-        self.modifyRadioButton = QRadioButton("Modify", self.fileHandlingGroupBox)
-        self.createNewRadioButton = QRadioButton("Create New", self.fileHandlingGroupBox)
-        self.overwriteRadioButton.setChecked(True)
-        self.exportSettingsPushButton = QPushButton("Export Settings-file")
-        self.exportSettingsPushButton.clicked.connect(self.export_settings)
-        # self.exportSettingsPushButton.setEnabled(False)
-        self.loadSettingsPushButton = QPushButton("Load Settings-file")
-        self.loadSettingsPushButton.clicked.connect(self.load_settings_file)
-        last_layout = QHBoxLayout()
-        last_layout.setContentsMargins(0, 0, 0, 0)
-        last_layout.addWidget(self.createNewRadioButton)
-        last_layout.addStretch()
-        last_layout.addWidget(self.exportSettingsPushButton)
-        last_layout.addWidget(self.loadSettingsPushButton)
-        self.fileHandlingLayout.addLayout(self.fileLocationLayout)
-        self.fileHandlingLayout.addWidget(self.overwriteRadioButton)
-        self.fileHandlingLayout.addWidget(self.modifyRadioButton)
-        self.fileHandlingLayout.addLayout(last_layout)
-        self.mainLayout.addWidget(self.fileHandlingGroupBox)
+        # self.fileHandlingGroupBox = QGroupBox("Settings File Handling", self)
+        # self.fileHandlingLayout = QVBoxLayout(self.fileHandlingGroupBox)
+        # self.fileLocationLineEdit = QLineEdit(self.fileHandlingGroupBox)
+        # self.fileLocationLineEdit.setPlaceholderText("File Location")
+        # self.fileLocationToolButton = QToolButton(self.fileHandlingGroupBox)
+        # self.fileLocationToolButton.setText("...")
+        # self.fileLocationToolButton.clicked.connect(self.get_file_location)
+        # self.fileLocationLayout = QHBoxLayout()
+        # self.fileLocationLayout.addWidget(self.fileLocationLineEdit)
+        # self.fileLocationLayout.addWidget(self.fileLocationToolButton)
+        # self.overwriteRadioButton = QRadioButton("Overwrite", self.fileHandlingGroupBox)
+        # self.modifyRadioButton = QRadioButton("Modify", self.fileHandlingGroupBox)
+        # self.createNewRadioButton = QRadioButton("Create New", self.fileHandlingGroupBox)
+        # self.overwriteRadioButton.setChecked(True)
+        # self.exportSettingsPushButton = QPushButton("Export Settings-file")
+        # self.exportSettingsPushButton.clicked.connect(self.export_settings)
+        # # self.exportSettingsPushButton.setEnabled(False)
+        # self.loadSettingsPushButton = QPushButton("Load Settings-file")
+        # self.loadSettingsPushButton.clicked.connect(self.load_settings_file)
+        # last_layout = QHBoxLayout()
+        # last_layout.setContentsMargins(0, 0, 0, 0)
+        # last_layout.addWidget(self.createNewRadioButton)
+        # last_layout.addStretch()
+        # last_layout.addWidget(self.exportSettingsPushButton)
+        # last_layout.addWidget(self.loadSettingsPushButton)
+        # self.fileHandlingLayout.addLayout(self.fileLocationLayout)
+        # self.fileHandlingLayout.addWidget(self.overwriteRadioButton)
+        # self.fileHandlingLayout.addWidget(self.modifyRadioButton)
+        # self.fileHandlingLayout.addLayout(last_layout)
+        # self.mainLayout.addWidget(self.fileHandlingGroupBox)
 
         # Auto-Export and Workers
         self.miscSettingsGroupBox = QGroupBox("Chapter Management Settings", self)
@@ -161,11 +350,113 @@ class AdvancedSettingsDialog(QDialog):
             "Size",
             "Smallest Size"
         ])
+        quality_layout = QHBoxLayout()
+        quality_layout.setContentsMargins(0, 0, 0, 0)
+        quality_layout.addWidget(QLabel("Auto-Transfer Quality preset:"))
+        quality_layout.addWidget(self.quality_combo)
+        quality_frame = QFrame()
+        quality_frame.setLayout(quality_layout)
+        quality_frame.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.max_cached_chapters_spinbox = QSpinBox(self.miscSettingsGroupBox, minimum=-1, singleStep=1)
+        chapters_layout = QHBoxLayout()
+        chapters_layout.setContentsMargins(0, 0, 0, 0)
+        chapters_layout.addWidget(QLabel("Max cached chapters:"))
+        chapters_layout.addWidget(self.max_cached_chapters_spinbox)
+        chapters_frame = QFrame()
+        chapters_frame.setLayout(chapters_layout)
+        chapters_frame.setFrameShape(QFrame.Shape.NoFrame)
+
         self.miscSettingsLayout.addRow(self.autoExportCheckBox)
         # self.miscSettingsLayout.addRow(QLabel("Number of Workers:"), self.workersSpinBox)
-        self.miscSettingsLayout.addRow(QLabel("Auto-Transfer Quality preset:"), self.quality_combo)
-        self.max_cached_chapters_spinbox = QSpinBox(self.miscSettingsGroupBox, minimum=-1, singleStep=1)
-        self.miscSettingsLayout.addRow(QLabel("Max cached chapters:"), self.max_cached_chapters_spinbox)
+        self.miscSettingsLayout.addRow(quality_frame, chapters_frame)
+        self.miscSettingsLayout.addRow(self.autoExportCheckBox)
+
+        self.image_proc_label_to_id = {
+            # Color
+            "Color: Bloom / Glow": "bloom",
+            "Color: Light Rays": "light_rays",
+            "Color: Split Tone": "split_tone",
+            "Color: Saturation Boost": "saturation_boost",
+            "Color: CLAHE + LAB (Enhanced Lightness)": "clahe_lab",
+            "Color: Flatten (K-Means)": "kmeans_flatten",
+            "Color: Flatten (Fast)": "flatten_fast",
+            # Stylize
+            "Stylize: Toon Shader": "toon_shader",
+            "Stylize: Poster Edge": "poster_edge",
+            "Stylize: Posterize Colors": "posterize",
+            "Stylize: Kuwahara Filter": "kuwahara",
+            "Stylize: Color Quantize (Flat Colors)": "color_quantize",
+            "Stylize: Sepia Tone (Vintage)": "sepia",
+            # Lines
+            # "Lens Distortion": "lens_distortion",
+            "Stylize: Adaptive Line Overlay": "adaptive_line_overlay",
+            "Stylize: Line Overlay (Canny)": "canny_line_overlay",
+            "Stylize: Color Dodge Line Overlay": "canny_line_overlay",
+            # B/W
+            "B/W: Luma": "grayscale_luma",
+            "B/W: CLAHE (Local Contrast)": "clahe",
+            # "B/W: Luma + Contrast Boost": "luma_contrast",
+            "B/W: Average": "grayscale_average",
+            "B/W: Adaptive Threshold (Line Art)": "adaptive_threshold",
+            "B/W: Threshold (Fast)": "threshold_fast",
+            "B/W: Edge Detection (Canny)": "canny_edges",
+            "B/W: Color Dodge (Pencil Highlight)": "color_dodge",
+            # Fixes
+            "Fix: Increase Resolution (2x)": "increase_resolution",
+            "Fix: AI-upscaling (2x)": "increase_resolution_dl",
+            "Fix: Resize to 1MP": "resize_to_1mp",
+            "Fix: Resize to 2MP": "resize_to_2mp",
+            "Fix: Resize to 4MP": "resize_to_4mp",
+            "Fix: Resize to 8MP": "resize_to_8mp",
+            "Fix: Resize to 12MP": "resize_to_12mp",
+            "Fix: Resize to 16MP": "resize_to_16mp",
+            "Fix: Resize to 20MP": "resize_to_20mp",
+            "Fix: Resize to 24MP": "resize_to_24mp",
+            "Fix: Resize to 28MP": "resize_to_28mp",
+            "Fix: Resize to 32MP": "resize_to_32mp",
+            "Fix: Shrink 50%": "shrink_50",
+            "Fix: Shrink 25%": "shrink_25",
+            "Fix: Invert Colors": "invert",
+            "Fix: Sharpen": "sharpen",
+            "Fix: Bilateral Filter (Soft Denoise)": "bilateral_filter_soft",
+            "Fix: Bilateral Filter (Denoise)": "bilateral_filter",
+            "Fix: Bilateral Filter (Strong Denoise)": "bilateral_filter_strong",
+            "Fix: Soft Blur": "soft_blur",
+            "Fix: Pixel Cleanup (Low-Res Art)": "pixel_cleanup",
+            "Fix: De-Block (Compression Repair)": "deblock",
+            "Fix: Denoise (Grain Cleanup)": "denoise",
+            "Fix: Smart Smooth (Contour Blur)": "smart_smooth",
+            "Fix: Gamma Correction (Brighten)": "gamma_correct",
+
+            # "LAB (Perceptual Color)": "lab",
+            # "Contrast Boost": "contrast_boost",
+            # "HSV": "hsv",
+            # "YCrCb": "ycrcb",
+            # "HLS": "hls",
+            # "HSV (Boost Value)": "hsv_boost",
+            # "YCrCb (Contrast Boost)": "ycrcb_boost",
+            # "HLS (Tone Adjust)": "hls_adjust",
+            # "B/W: Max-Min (Desat)": "grayscale_maxmin",
+            # "B/W: Red": "grayscale_red",
+            # "B/W: Green": "grayscale_green",
+            # "B/W: Blue": "grayscale_blue",
+            "Unknown ID": "unknown_id"
+        }
+        self.image_proc_id_to_label = {v: k for k, v in self.image_proc_label_to_id.items()}
+        self.image_processing_pipeline = QLabelSelector(self.miscSettingsGroupBox)
+        lst = list(self.image_proc_label_to_id.keys())
+        lst.remove("Unknown ID")
+        self.image_processing_pipeline.set_available_labels(lst)
+        image_proc_layout = QVBoxLayout()
+        image_proc_layout.setContentsMargins(0, 0, 0, 0)
+        image_proc_layout.addWidget(QLabel("Image processing pipeline"))
+        image_proc_layout.addWidget(self.image_processing_pipeline)
+
+        self.miscSettingsLayout.addRow(image_proc_layout)
+
+        self.use_threading_if_available = QCheckBox("Use threading for pipeline if available")
+        self.miscSettingsLayout.addRow(self.use_threading_if_available)
 
         self.mainLayout.addWidget(self.miscSettingsGroupBox)
 
@@ -222,10 +513,11 @@ class AdvancedSettingsDialog(QDialog):
                 "light": self._save_theme(self.lightThemeComboBox.currentText()),
                 "dark": self._save_theme(self.darkThemeComboBox.currentText()),
                 "font": self.fontComboBox.currentText()},
-            "settings_file_path": self.fileLocationLineEdit.text(),
-            "settings_file_mode": "overwrite" if self.overwriteRadioButton.isChecked() else "modify" if self.modifyRadioButton.isChecked() else "create_new",
+            # "settings_file_path": self.fileLocationLineEdit.text(),
+            # "settings_file_mode": "overwrite" if self.overwriteRadioButton.isChecked() else "modify" if self.modifyRadioButton.isChecked() else "create_new",
             "misc": {"auto_export": self.autoExportCheckBox.isChecked(), "quality_preset": self.quality_combo.currentText().lower().replace(" ", "_"),
-                     "max_cached_chapters": self.max_cached_chapters_spinbox.value()}})
+                     "max_cached_chapters": self.max_cached_chapters_spinbox.value(), "use_threading_for_pipeline_if_available": self.use_threading_if_available.isChecked(),
+                     "image_processing_pipeline": [self.image_proc_label_to_id.get(x, "unknown_id") for x in self.image_processing_pipeline.get_current_pills()]}})
                      #"num_workers": self.workersSpinBox.value()}})
 
     def load_settings_file(self):
@@ -325,25 +617,27 @@ class AdvancedSettingsDialog(QDialog):
         self.darkThemeComboBox.setCurrentText(self._format_theme_name(dark_theme))
         self.fontComboBox.setCurrentText(settings.get("themes").get("font"))
 
-        self.fileLocationLineEdit.setText(settings.get("settings_file_path", ""))
-
-        sett_mode = settings.get("settings_file_mode")
-        if sett_mode == "overwrite":
-            self.overwriteRadioButton.setChecked(True)
-            self.modifyRadioButton.setChecked(False)
-            self.createNewRadioButton.setChecked(False)
-        elif sett_mode == "modify":
-            self.overwriteRadioButton.setChecked(False)
-            self.modifyRadioButton.setChecked(True)
-            self.createNewRadioButton.setChecked(False)
-        else:
-            self.overwriteRadioButton.setChecked(False)
-            self.modifyRadioButton.setChecked(False)
-            self.createNewRadioButton.setChecked(True)
+        # self.fileLocationLineEdit.setText(settings.get("settings_file_path", ""))
+        #
+        # sett_mode = settings.get("settings_file_mode")
+        # if sett_mode == "overwrite":
+        #     self.overwriteRadioButton.setChecked(True)
+        #     self.modifyRadioButton.setChecked(False)
+        #     self.createNewRadioButton.setChecked(False)
+        # elif sett_mode == "modify":
+        #     self.overwriteRadioButton.setChecked(False)
+        #     self.modifyRadioButton.setChecked(True)
+        #     self.createNewRadioButton.setChecked(False)
+        # else:
+        #     self.overwriteRadioButton.setChecked(False)
+        #     self.modifyRadioButton.setChecked(False)
+        #     self.createNewRadioButton.setChecked(True)
 
         self.autoExportCheckBox.setChecked(settings.get("misc").get("auto_export") is True)
         # self.workersSpinBox.setValue(settings.get("misc").get("num_workers"))
         self.quality_combo.setCurrentText(settings.get("misc").get("quality_preset").replace("_", " ").title())
+        self.image_processing_pipeline.set_current_pills([self.image_proc_id_to_label.get(x, "Unknown ID") for x in settings.get("misc").get("image_processing_pipeline")])
+        self.use_threading_if_available.setChecked(settings.get("misc").get("use_threading_for_pipeline_if_available"))
         self.max_cached_chapters_spinbox.setValue(settings.get("misc").get("max_cached_chapters"))
 
     def revert_last_saved(self):
@@ -381,10 +675,11 @@ class AdvancedSettingsDialog(QDialog):
                 "light": self._save_theme(self.lightThemeComboBox.currentText()),
                 "dark": self._save_theme(self.darkThemeComboBox.currentText()),
                 "font": self.fontComboBox.currentText()},
-            "settings_file_path": self.fileLocationLineEdit.text(),
-            "settings_file_mode": "overwrite" if self.overwriteRadioButton.isChecked() else "modify" if self.modifyRadioButton.isChecked() else "create_new",
+            # "settings_file_path": self.fileLocationLineEdit.text(),
+            # "settings_file_mode": "overwrite" if self.overwriteRadioButton.isChecked() else "modify" if self.modifyRadioButton.isChecked() else "create_new",
             "misc": {"auto_export": self.autoExportCheckBox.isChecked(), "quality_preset": self.quality_combo.currentText().lower().replace(" ", "_"),
-                     "max_cached_chapters": self.max_cached_chapters_spinbox.value()}}
+                     "max_cached_chapters": self.max_cached_chapters_spinbox.value(), "use_threading_for_pipeline_if_available": self.use_threading_if_available.isChecked(),
+                     "image_processing_pipeline": [self.image_proc_label_to_id.get(x, "unknown_id") for x in self.image_processing_pipeline.get_current_pills()]}}
                      # "num_workers": self.workersSpinBox.value()}}
 
         super().accept()
@@ -518,6 +813,12 @@ class LibraryEdit(QComboBox):
 
         # Draw elided text manually
         painter.drawText(edit_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, elided)
+
+    def setCurrentIndex(self, index, /):
+        super().setCurrentIndex(index)
+
+    def setCurrentText(self, text, /):
+        super().setCurrentText(text)
 
 
 class TransferDialog(QDialog):

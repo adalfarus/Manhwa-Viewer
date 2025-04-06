@@ -1119,3 +1119,23 @@ class Themes:
     customlight_blue_ocean = Theme(generate_theme_stylesheet(**themes["Blue Ocean"]), None, "dark")
     customlight_red_rage = Theme(generate_theme_stylesheet(**themes["Red Rage"]), None, "dark")
     customlight_soft_gray = Theme(generate_theme_stylesheet(**themes["Soft Gray"]), None, "light")
+
+    themes["Moonlight Ink"] = {
+        "text_color": "#e0e0f0",
+        "background_color": "#1f1f2e",
+        "disabled_text_color": "#6c6c7a",
+        "disabled_background_color": "#2c2c3a",
+        "border_color": "#3a3a55",
+        "hover_background": "#2e2e40",
+        "selection_background": "#393963",
+        "selection_text_color": "#ffffff",
+        "focus_background": "#262636",
+        "highlight_border": "#7a7ad6",
+        "button_background": "#2c2c3a",
+        "scrollbar_handle": "#7a7ad6"
+    }
+    customdark_moonlight_ink = Theme(
+        generate_theme_stylesheet(**themes["Moonlight Ink"]),
+        "Fusion",  # Optional, or use None
+        "dark"
+    )

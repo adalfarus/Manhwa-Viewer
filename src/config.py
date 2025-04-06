@@ -79,7 +79,7 @@ def _configure() -> dict[str, str]:
     accumulated_logs = "Starting cloning of defaults ...\n"
     old_cwd = _os.getcwd()
     install_dir = _os.path.join(old_cwd, "default-config")
-    base_app_dir = _os.path.join(_os.environ.get("LOCALAPPDATA", "."), PROGRAM_NAME_NORMALIZED)
+    base_app_dir = _os.path.join(_os.environ.get("LOCALAPPDATA", ""), PROGRAM_NAME_NORMALIZED)
     base_version_dir = _os.path.join(base_app_dir, f"{VERSION}{VERSION_ADD}")
 
     if INDEV and _os.path.exists(base_app_dir):  # Remove everything to simulate a fresh install
@@ -99,14 +99,15 @@ def _configure() -> dict[str, str]:
     dirs_to_create = []
     dir_structure = (
             ("data", ("logs",)),
-            ("caches", ("cache",)),
+            ("caches", ()),
             (f"{VERSION}{VERSION_ADD}", (
+                ("models", ()),
                 ("core", ("libs", "modules")),
                 ("extensions", ())
             ))
     )  # Use a stack to iteratively traverse the directory structure
     remove_from_src_dir = f"{VERSION}{VERSION_ADD}"
-    remove_for = (("core", "libs"), ("core", "modules"), ("extensions",))
+    remove_for = (("core",), ("core", "libs"), ("core", "modules"), ("extensions",), ("models",))
     stack: list[tuple[str, tuple[str, ...] | tuple]] = [(base_app_dir, item) for item in dir_structure]
     while stack:
         base_path, (dir_name, subdirs) = stack.pop()
@@ -128,7 +129,7 @@ def _configure() -> dict[str, str]:
         _os.makedirs(dir_to_create, exist_ok=True)
 
     # _sys.path.insert(0, _os.path.join(base_app_dir, "core", "modules"))
-    _sys.path.insert(0, base_app_dir)  # To bug-fix some problem, I think with std libs
+    _sys.path.insert(0, base_version_dir)  # To bug-fix some problem, I think with std libs
     _sys.path.insert(0, _os.path.join(base_version_dir, "core", "libs"))
 
     for directory in dirs_to_create:
@@ -155,8 +156,8 @@ def _configure() -> dict[str, str]:
     }
 
 
-def check() -> RuntimeError | None:
-    """Check if environment is suitable"""
+def check() -> None:
+    """Check if environment is suitable. Can raise RuntimeError"""
     global CHECK_DONE, exit_code, exit_message
 
     if CHECK_DONE:
@@ -181,7 +182,7 @@ def check() -> RuntimeError | None:
         exit_code, exit_message = 1, (f"You are currently on {'.'.join([str(x) for x in _sys.version_info])}. "
                                       f"Please run this using a supported python version ({', '.join(py_versions_strs)}).")
     if exit_code:
-        return RuntimeError(exit_message)
+        raise RuntimeError(exit_message)
     return None
 
 

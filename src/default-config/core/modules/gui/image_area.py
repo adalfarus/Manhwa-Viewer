@@ -2,12 +2,15 @@
 from PySide6.QtWidgets import (QWidget, QGraphicsProxyWidget, QGraphicsItem, QGraphicsPixmapItem, QSizePolicy,
                                QStyleOptionGraphicsItem, QGraphicsView, QScrollBar, QGraphicsScene)
 from PySide6.QtCore import QObject, Signal, Qt, QRectF, QPropertyAnimation, QByteArray, QEasingCurve, QSize, QTimer
-from PySide6.QtGui import QPixmap, QPainter, QPen, QFont, QTextOption, QTransform, QWheelEvent, QResizeEvent
+from PySide6.QtGui import (QPixmap, QPainter, QPen, QFont, QTextOption, QTransform, QWheelEvent, QResizeEvent,
+                           QImageReader, QImage, QColor)
 
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 from aplustools.io.qtquick import QNoSpacingBoxLayout, QBoxDirection
 from aplustools.io.concurrency import LazyDynamicThreadPoolExecutor
+
+import cv2
 
 import math
 import os
@@ -257,7 +260,30 @@ class QScalingGraphicPixmapItem(QGraphicsPixmapItem, QObject):
         self._original_pixmap = QPixmap(self._abs_pixmap_path)
         self._is_loaded = True
         if self._original_pixmap.isNull():
-            raise ValueError("Image could not be loaded.")
+            reader = QImageReader(self._abs_pixmap_path)
+            reader.setAutoTransform(True)
+
+            max_dim = QSize(15000, 15000)
+            size = reader.size()
+            if size.width() > max_dim.width() or size.height() > max_dim.height():
+                scaled_size = size.scaled(max_dim, Qt.AspectRatioMode.KeepAspectRatio)
+                reader.setScaledSize(scaled_size)
+
+            img = reader.read()
+            self._original_pixmap = QPixmap.fromImage(img)
+
+            if self._original_pixmap.isNull():
+                img = cv2.imread(self._abs_pixmap_path)
+                if img is not None:
+                    h, w, ch = img.shape
+                    bytes_per_line = ch * w
+                    qimg = QImage(img.data, w, h, bytes_per_line, QImage.Format.Format_BGR888)
+                    self._original_pixmap = QPixmap.fromImage(qimg)
+                if self._original_pixmap.isNull():
+                    red_image = QImage(512, 512, QImage.Format.Format_RGB32)
+                    red_image.fill(QColor("red"))
+                    self._original_pixmap = QPixmap.fromImage(red_image)
+                    print("First load not possible")
         self._width = self._original_pixmap.width()
         self._height = self._original_pixmap.height()
         self._true_width = float(self._original_pixmap.width())
@@ -979,7 +1005,7 @@ class VerticalManagement(BaseManagement):
 
     @staticmethod
     def addImageToScene(image, target):
-        # image.first_load()  # target.thread_pool.submit(image.first_load)
+        image.first_load()  # target.thread_pool.submit(image.first_load)
         image.setInt("width")
 
     def _get_wanted_size(self, target, item: QScalingGraphicPixmapItem, viewport_width: int, last_item: bool = False):

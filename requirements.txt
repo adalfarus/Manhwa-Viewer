@@ -1,15 +1,17 @@
-aplustools==2.0.0.0a12
+aplustools==2.0.0.0a14
 beautifulsoup4~=4.12.2
-Pillow~=10.3.0
+# Pillow~=10.3.0
 PySide6==6.8.2.1
 Requests~=2.32.3
-urllib3~=2.1.0
+urllib3~=2.2.2
 packaging~=24.0
 stdlib-list~=0.11.1
-# aiohttp~=3.11.14
-# aiofiles~=24.1.0
 auto-py-to-exe~=2.46.0
 pyinstaller~=6.12.0
 py7zr~=0.22.0
 rarfile~=4.2
 playwright~=1.51.0
+numpy~=2.2.4
+imageio~=2.37.0
+opencv-python~=4.11.0.86
+opencv-contrib-python~=4.11.0.86

@@ -276,7 +276,7 @@ class OfflineImage:
             if self._save_image(source_path, img_data, img_name) is None:
                 return False
         except Exception as e:
-            print(f"Error occurred: {e}")
+            print(f"Base64 Decode Error occurred: {e}")
             return False
         return True
 

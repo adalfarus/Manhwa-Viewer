@@ -7,7 +7,7 @@
   },
   {
    "optionDest": "filenames",
-   "value": "./main.py"
+   "value": "./src/main.py"
   },
   {
    "optionDest": "onefile",
@@ -19,7 +19,7 @@
   },
   {
    "optionDest": "icon_file",
-   "value": "./data/Untitled-1.ico"
+   "value": "./src/default-config/data/Untitled-1.ico"
   },
   {
    "optionDest": "clean_build",
@@ -55,31 +55,11 @@
   },
   {
    "optionDest": "datas",
-   "value": "./caches;caches/"
-  },
-  {
-   "optionDest": "datas",
-   "value": "./data;data/"
-  },
-  {
-   "optionDest": "datas",
-   "value": "./extensions;extensions/"
-  },
-  {
-   "optionDest": "datas",
-   "value": "./libs;libs/"
-  },
-  {
-   "optionDest": "datas",
-   "value": "./configg.py;./"
+   "value": "./src/default-config;default-config/"
   },
   {
    "optionDest": "datas",
    "value": "./.venv/Lib/site-packages/stdlib_list;stdlib_list/"
-  },
-  {
-   "optionDest": "datas",
-   "value": "./moduless;modules/"
   },
   {
    "optionDest": "datas",
@@ -180,6 +160,18 @@
   {
    "optionDest": "hiddenimports",
    "value": "ctypes.util"
+  },
+  {
+   "optionDest": "datas",
+   "value": "./src/configg.py;."
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "playwright"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "psutil"
   }
  ],
  "nonPyinstallerOptions": {

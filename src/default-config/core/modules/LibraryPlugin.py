@@ -82,7 +82,7 @@ class CoreSaver(metaclass=ABCMeta):
 
     @classmethod
     @abstractmethod
-    def save_chapter(cls, provider: "CoreProvider",chapter_number: str, chapter_title: str, chapter_img_folder: str,
+    def save_chapter(cls, provider: "CoreProvider", chapter_number: str, chapter_title: str, chapter_img_folder: str,
                      quality_present: _ty.Literal["best_quality", "quality", "size", "smallest_size"],
                      progress_signal: Signal | None = None) -> _ty.Generator[None, None, bool]:
         ...
@@ -114,7 +114,7 @@ class CoreProvider(metaclass=ABCMeta):
     needs_library_path: bool = False  # Remove?
     register_baseclass: str = "CoreProvider"
     use_threading: bool = True
-    saver: _ty.Type[CoreSaver] | None = None
+    register_saver: _ty.Type[CoreSaver] | None = None
     # You can find the button popup def in main.py under the MainWindow cls, IT IS NOT THREAD SAFE, DO NOT CALL IN CHAPTER LOADING METHODS
     button_popup: _ty.Callable[[str, str, str, _ty.Literal["Information", "Critical", "Question", "Warning", "NoIcon"], list[str], str, str | None], tuple[str | None, bool]]
 
@@ -169,7 +169,7 @@ class CoreProvider(metaclass=ABCMeta):
         try:
             while True:
                 progress = next(gen)
-                if progress is not None:
+                if progress_signal is not None:
                     progress_signal.emit(progress)
                 yield  # Return control briefly
         except StopIteration as e:
@@ -424,7 +424,7 @@ class LibraryProvider(CoreProvider, metaclass=ABCMeta):
     register_provider_id: str = "library_metadata_provider"
     needs_library_path: bool = True
     register_baseclass: str = "LibraryProvider"
-    saver: _ty.Type[CoreSaver] = LibrarySaver
+    register_saver: _ty.Type[CoreSaver] = LibrarySaver
 
     def __init__(self, title: str, chapter: int, library_path: str, logo_folder: str, logo: ProviderImage,
                  icon: ProviderImage | None) -> None:
@@ -869,6 +869,74 @@ class ManhwaLikeProvider(OnlineProvider, metaclass=ABCMeta):
             return ""
         return self._icon.get_path(self._logo_folder)
 
+    def _search_post_js(self, search_text: str) -> dict | None:
+        print("[JS MODE] Performing JS-based POST search.")
+        with self._downloader_lock:
+            if self._browser is None:
+                print("[JS MODE] Initializing local Playwright browser...")
+                working: bool = self._enable_js()
+                if not working:
+                    return None
+
+        page = self._browser.new_page()
+        url = f"https://{self._specific_provider_website}/wp-admin/admin-ajax.php"
+
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
+            'Accept': 'application/json, text/javascript, */*; q=0.01',
+            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Origin': f'https://{self._specific_provider_website}',
+            'Referer': f'https://{self._specific_provider_website}',
+        }
+
+        post_data = f'action=wp-manga-search-manga&title={search_text}'
+
+        response = page.request.post(url, headers=headers, data=post_data)
+
+        if response.status == 200:
+            try:
+                return response.json()
+            except Exception as e:
+                print(f"[JS MODE] Failed to parse JSON response: {e}")
+        else:
+            print(f"[JS MODE] Error: POST returned {response.status}")
+        return None
+
+    def _search_web_js(self, search_text: str) -> dict:
+        print("[JS MODE] Performing JS-based web search.")
+        with self._downloader_lock:
+            if self._browser is None:
+                print("[JS MODE] Initializing local Playwright browser...")
+                working: bool = self._enable_js()
+                if not working:
+                    return {"success": False, "data": [""]}
+
+        page = self._browser.new_page()
+        search_url = f"https://{self._specific_provider_website}?s={search_text}&post_type=wp-manga"
+
+        try:
+            page.goto(search_url, wait_until="networkidle")
+            page.wait_for_timeout(3000)
+            html = page.content()
+        except Exception as e:
+            print(f"[JS MODE] Failed to load page: {e}")
+            return {"success": False, "data": [""]}
+        finally:
+            page.close()
+
+        soup = BeautifulSoup(html, 'html.parser')
+        c_tabs_item_divs = soup.find_all('div', class_='c-tabs-item')
+
+        titles_urls = []
+        for div in c_tabs_item_divs:
+            for row_c_tabs in div.find_all('div', class_='row c-tabs-item__content'):
+                a_tag = row_c_tabs.find('a')
+                if a_tag and 'href' in a_tag.attrs and 'title' in a_tag.attrs:
+                    titles_urls.append({"title": a_tag['title'], "url": a_tag['href']})
+
+        return {"data": titles_urls}
+
     def _search_post(self, search_text: str) -> dict | None:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
@@ -902,7 +970,7 @@ class ManhwaLikeProvider(OnlineProvider, metaclass=ABCMeta):
 
     def _search_web(self, search_text: str) -> dict:
         base_url = self._specific_provider_website
-        search_url = f"https://{base_url}?s={search_text}&post_type=wp-manga"
+        search_url = f"https://{base_url}/?s={search_text}&post_type=wp-manga"
 
         try:
             response = requests.get(search_url)
@@ -928,10 +996,16 @@ class ManhwaLikeProvider(OnlineProvider, metaclass=ABCMeta):
     def _search(self, search_text: str) -> dict | None:
         text = search_text
 
-        search_results = self._search_web(text)
-        if not search_results["data"]:
-            return self._search_post(text)
-        return search_results
+        if self._js_enabled:
+            search_results = self._search_web_js(text)
+            if not search_results["data"]:
+                return self._search_post_js(text)
+            return search_results
+        else:
+            search_results = self._search_web(text)
+            if not search_results["data"]:
+                return self._search_post(text)
+            return search_results
 
     def _get_current_chapter_url(self) -> str | None:
         response_data = self._search(self._title)

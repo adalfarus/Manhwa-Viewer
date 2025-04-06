@@ -1,6 +1,7 @@
 """TBA"""
 # Copyright adalfarus 2025
-import config  # Configures python environment before anything else is done
+import config
+
 config.check()
 config.setup()
 
@@ -15,16 +16,17 @@ from PySide6.QtGui import QDesktopServices, QPixmap, QIcon, QDoubleValidator, QF
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QRect, QUrl, QSize
 from PySide6.QtGui import QColor
 
-from core.modules.ProviderPlugin import CoreProvider, CoreSaver
-from core.modules.Classes import Settings, AutoProviderManager, CacheManager
-from core.modules.themes import Themes
-from core.modules.IOManager import IOManager
+from modules.LibraryPlugin import CoreProvider, CoreSaver
+from modules.Classes import Settings, AutoProviderManager, CacheManager
+from modules.themes import Themes
+from modules.IOManager import IOManager
+from modules.pipeline_plugin.loader import PipelineEffectLoader
 
-from core.modules.gui import (CustomComboBox, AdvancedSettingsDialog, TransferDialog, TutorialPopup, WaitingDialog,
+from modules.gui import (CustomComboBox, AdvancedSettingsDialog, TransferDialog, TutorialPopup, WaitingDialog,
                               LibraryEdit)
-from core.modules.gui.tasks import CustomProgressDialog, TaskBar, TaskWidget
-from core.modules.gui.search_widget import SearchWidget
-from core.modules.gui.image_area import TargetContainer, VerticalManagement
+from modules.gui.tasks import CustomProgressDialog, TaskBar
+from modules.gui.search_widget import SearchWidget
+from modules.gui.image_area import TargetContainer, VerticalManagement
 
 from aplustools.io.env import diagnose_shutdown_blockers
 # Apt stuff ( update to newer version )
@@ -33,6 +35,9 @@ from oaplustools.io.environment import System
 
 from argparse import ArgumentParser
 from traceback import format_exc
+from pathlib import Path as PLPath
+import imageio.v3 as iio
+import numpy as np
 import requests
 import logging
 import sqlite3
@@ -42,19 +47,18 @@ import json
 import math
 import time
 import sys
+import cv2
 import os
 
 # Standard typing imports for aps
-from abc import abstractmethod, ABCMeta
 import collections.abc as _a
 import typing as _ty
-import types as _ts
 
-import multiprocessing
+# import multiprocessing
 import stdlib_list
 from aplustools.io.qtquick import QQuickMessageBox
 
-multiprocessing.freeze_support()
+# multiprocessing.freeze_support()
 hiddenimports = list(stdlib_list.stdlib_list())
 
 
@@ -110,7 +114,7 @@ class MainWindow(QMainWindow):
             self.update_theme(self.os_theme.lower())
 
             # Advanced setup
-            self.provider = None
+            self.provider: CoreProvider | None = None
             self.provider_list: list[CoreProvider] = []
             self.saver_list: list[CoreSaver] = []
             self.provider_combobox.currentIndexChanged.disconnect()
@@ -534,7 +538,7 @@ class MainWindow(QMainWindow):
         self.show_provider_logo_checkbox.checkStateChanged.connect(self.set_show_provider_logo)
         self.title_selector.editingFinished.connect(self.finish_editing_title)
         self.chapter_selector.textChanged.connect(self.set_chapter)
-        self.library_edit.currentTextChanged.connect(self.change_library)
+        self.library_edit.currentIndexChanged.connect(self.change_library)
         self.library_edit.remove_library.connect(lambda item: (
             self.settings.set_libraries(self.settings.get_libraries().remove(item[1])),
             self.settings.set_current_lib_idx(self.library_edit.currentIndex())
@@ -825,9 +829,10 @@ class MainWindow(QMainWindow):
         self.transparent_image.setPixmap(new_pixmap)
         self.update_provider_logo()
         self.update_provider_logo()
-        if self.provider.saver is not None:
+        if self.provider.register_saver is not None:
             self.transfer_chapter_s_button.setEnabled(False)
-            self.saver_combobox.setCurrentText(name)
+            self.saver_combobox.setCurrentIndex(self.saver_list.index(self.provider.register_saver))
+            self.change_saver()
             for i in range(0, self.saver_combobox.count()):
                 item = self.saver_combobox.model().item(i)
                 if i == self.saver_combobox.currentIndex():
@@ -1142,21 +1147,24 @@ class MainWindow(QMainWindow):
                 self.library_edit.setCurrentIndex(self.settings.get_current_lib_idx())
             else:
                 self.library_edit.setCurrentIndex(-1)
+            self.change_library()
 
     def change_library(self, *args) -> None:
         new_library_path: str = self.library_edit.current_library()[1]
-        if self.saver.is_compatible(new_library_path):
-            self.saver.create_library(*self.library_edit.current_library()[::-1])
-        else:
-            for i, saver in enumerate(self.saver_list):
-                if saver.is_compatible(new_library_path):
-                    self.saver_combobox.setCurrentIndex(i)
-                    break
-            # if self.settings.get_current_lib_idx() != self.library_edit.currentIndex():
-            #     self.library_edit.setCurrentIndex(self.settings.get_current_lib_idx())
-            # else:
-            #     self.library_edit.setCurrentIndex(-1)
-            # new_library_path = self.library_edit.current_library()[1]
+        if new_library_path != "":
+            if self.saver.is_compatible(new_library_path):
+                self.saver.create_library(*self.library_edit.current_library()[::-1])
+            else:
+                for i, saver in enumerate(self.saver_list):
+                    if saver.is_compatible(new_library_path):
+                        self.saver_combobox.setCurrentIndex(i)
+                        self.change_saver()
+                        break
+                # if self.settings.get_current_lib_idx() != self.library_edit.currentIndex():
+                #     self.library_edit.setCurrentIndex(self.settings.get_current_lib_idx())
+                # else:
+                #     self.library_edit.setCurrentIndex(-1)
+                # new_library_path = self.library_edit.current_library()[1]
         self.settings.set_current_lib_idx(self.library_edit.currentIndex())
         self.provider.set_library_path(new_library_path)
         if hasattr(self, "previous_provider"):
@@ -1264,9 +1272,7 @@ class MainWindow(QMainWindow):
     # Rest
     def reload_providers(self) -> None:
         provider_manager: AutoProviderManager = AutoProviderManager(self.extensions_folder, CoreProvider)
-        print("EXT", self.extensions_folder)
         loaded_provs = provider_manager.get_providers()
-        print(loaded_provs)
         self.provider_list.clear()
         self.saver_list.clear()
 
@@ -1275,7 +1281,7 @@ class MainWindow(QMainWindow):
 
         self.provider_combobox.clear()
         self.saver_combobox.clear()
-        last_prov_idx: int | None = None
+        # last_prov_idx: int | None = None
         saved_prov_idx: int | None = None
         saved_provider_id = self.settings.get_provider_id()
         saved_saver_idx: int = -1
@@ -1321,36 +1327,37 @@ class MainWindow(QMainWindow):
             # Add item to the dropdown
             self.provider_combobox.addItem(icon, provider_name)
 
-            if provider.saver is not None:
-                self.saver_list.append(provider.saver)
-                self.saver_combobox.addItem(icon, provider.saver.register_library_name)
-                if provider.saver.register_library_id == saved_saver_id:
+            if provider.register_saver is not None:
+                self.saver_list.append(provider.register_saver)
+                self.saver_combobox.addItem(icon, provider.register_saver.register_library_name)
+                if provider.register_saver.register_library_id == saved_saver_id:
                     saved_saver_idx = saver_i
                 saver_i += 1
 
             if not provider.is_working():
                 item = self.provider_combobox.model().item(prov_i)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
-                if provider.saver is not None:
+                if provider.register_saver is not None:
                     item2 = self.saver_combobox.model().item(saver_i-1)
                     item2.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
             else:
                 if provider.register_provider_id == saved_provider_id:
                     saved_prov_idx = prov_i
-                last_prov_idx = prov_i  # Track last working provider
+                # last_prov_idx = prov_i  # Track last working provider
             # if "Provider" not in provider_cls_name:
             #     self.provider_combobox.setItemUnselectable(prov_i)
             prov_i += 1
         if saved_prov_idx is not None:
             print(f"Saved provider ({saved_provider_id}) working")
             self.provider_combobox.setCurrentIndex(saved_prov_idx)
-        elif last_prov_idx is not None:
-            print(f"Other working provider ({last_prov_idx})")
-            self.provider_combobox.setCurrentIndex(last_prov_idx)  # Fallback to last working provider
+        # elif last_prov_idx is not None:
+        #     print(f"Other working provider ({last_prov_idx})")
+        #     self.provider_combobox.setCurrentIndex(last_prov_idx)  # Fallback to last working provider
         else:
-            print("No working provider")
+            print("Saved provider not found")
             self.provider_combobox.setCurrentIndex(-1)  # No selection if no working provider found
         self.saver_combobox.setCurrentIndex(saved_saver_idx)
+        self.change_saver()
         self.reload_searchers()
 
     def reload_searchers(self) -> None:
@@ -1410,11 +1417,20 @@ class MainWindow(QMainWindow):
         self.chapter_rate_selector.setText(str(self.settings.get_chapter_rate()))
         # self.provider_type_combobox.setCurrentText(self.settings.get_provider_type().title())
         lib_idx = self.settings.get_current_lib_idx()
+        self.library_edit.currentIndexChanged.disconnect(self.change_library)
         self.library_edit.clear()
         for path in self.settings.get_libraries():
             name = self.get_library_name(path)
             self.library_edit.add_library_item(name, path)
-        self.library_edit.setCurrentIndex(lib_idx)
+        if lib_idx != -1:
+            self.library_edit.setCurrentIndex(lib_idx)
+        else:
+            self.library_edit.blockSignals(True)
+            self.library_edit.setCurrentIndex(-1)
+            self.library_edit.setEditText("")  # ← Works better than setCurrentText("")
+            self.library_edit.clearEditText()  # Optional, more explicit
+            self.library_edit.blockSignals(False)
+        self.library_edit.currentIndexChanged.connect(self.change_library)
 
         # self.provider.set_blacklisted_websites(self.settings.get_blacklisted_websites())
 
@@ -1533,6 +1549,464 @@ class MainWindow(QMainWindow):
         self.task_successful = progress_dialog.task_successful
         self.threading = False
 
+    @staticmethod
+    def _resize_to_pixel_count(img: np.ndarray, target_density_per_mpx: int = 1_000_000) -> np.ndarray:
+        h, w = img.shape[:2]
+        img_area = h * w
+        reference_area = 1_000_000  # 1000x1000 region
+
+        desired_pixels = (img_area / reference_area) * target_density_per_mpx
+        scale = (desired_pixels / img_area) ** 0.5
+
+        new_w, new_h = int(w * scale), int(h * scale)
+
+        if scale < 1:  # Choose interpolation method
+            interpolation = cv2.INTER_AREA  # Downscaling
+        elif scale > 1:
+            interpolation = cv2.INTER_CUBIC  # Upscaling
+        else:
+            return img  # No resize needed
+
+        return cv2.resize(img, (max(1, new_w), max(1, new_h)), interpolation=interpolation)
+
+    def apply_transform(self, img: np.ndarray, transform_id: str) -> np.ndarray:
+        def gray():
+            if len(img.shape) == 2:
+                return img  # already grayscale
+            return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        match transform_id:
+            case "invert":
+                if len(img.shape) == 2:
+                    return cv2.bitwise_not(img)
+                elif img.shape[2] == 4:  # BGRA
+                    bgr = img[:, :, :3]
+                    alpha = img[:, :, 3:]
+                    inverted = cv2.bitwise_not(bgr)
+                    return np.concatenate((inverted, alpha), axis=2)
+                else:
+                    return cv2.bitwise_not(img)
+            case "clahe_lab":
+                if len(img.shape) == 2 or img.shape[2] != 3:
+                    img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+                l, a, b = cv2.split(lab)
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                l = clahe.apply(l)
+                return cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
+            case "kmeans_flatten":
+                if len(img.shape) == 2 or img.shape[2] != 3:
+                    img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                Z = img.reshape((-1, 3)).astype(np.float32)
+                criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+                K = 8
+                _, labels, centers = cv2.kmeans(Z, K, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+                centers = np.uint8(centers)
+                result = centers[labels.flatten()].reshape(img.shape)
+                return result
+            case "flatten_fast":
+                # Fast color simplification (much faster than K-Means)
+                return cv2.pyrMeanShiftFiltering(img, sp=8, sr=16)
+            case "bloom":
+                blur = cv2.GaussianBlur(img, (0, 0), sigmaX=10, sigmaY=10)
+                return cv2.addWeighted(img, 1.0, blur, 0.3, 0)
+            case "sharpen":
+                # Soft unsharp masking: sharp = original + (original - blur) * amount
+                blur = cv2.GaussianBlur(img, (0, 0), sigmaX=1.5)
+                sharpened = cv2.addWeighted(img, 1.5, blur, -0.5, 0)
+                return sharpened
+            case "soft_blur":
+                return cv2.GaussianBlur(img, (5, 5), 1.5)
+            case "saturation_boost":
+                hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+                h, s, v = cv2.split(hsv)
+                s = cv2.multiply(s, 1.4)
+                s = np.clip(s, 0, 255).astype(np.uint8)
+                return cv2.cvtColor(cv2.merge((h, s, v)), cv2.COLOR_HSV2BGR)
+            # case "contrast_boost":
+            #     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+            #     l, a, b = cv2.split(lab)
+            #     l = cv2.equalizeHist(l)
+            #     return cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
+            case "toon_shader":
+                # Bilateral filter for smooth edges
+                smooth = cv2.bilateralFilter(img, d=9, sigmaColor=75, sigmaSpace=75)
+
+                # Convert to grayscale and apply adaptive threshold
+                gray = cv2.cvtColor(smooth, cv2.COLOR_BGR2GRAY)
+                edges = cv2.adaptiveThreshold(gray, 255,
+                                              cv2.ADAPTIVE_THRESH_MEAN_C,
+                                              cv2.THRESH_BINARY, 9, 5)
+
+                # Reduce colors (posterize) with median blur
+                quantized = cv2.pyrMeanShiftFiltering(smooth, sp=10, sr=30)
+
+                # Combine with edges
+                edges_colored = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+                return cv2.bitwise_and(quantized, edges_colored)
+            case "posterize":
+                levels = 4  # Change for stronger or subtler effect, but not too many
+                factor = 256 // levels
+                return ((img // factor) * factor).astype(np.uint8)
+            case "color_quantize":
+                levels = 10  # Change for stronger or subtler effect, but not too many
+                factor = 256 // levels
+                return ((img // factor) * factor).astype(np.uint8)
+            case "light_rays":
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                bright = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)[1]
+
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+                rays = cv2.dilate(bright, kernel, iterations=15)
+                rays = cv2.GaussianBlur(rays, (0, 0), sigmaX=15)
+
+                rays_colored = cv2.cvtColor(rays, cv2.COLOR_GRAY2BGR)
+                return cv2.addWeighted(img, 1.0, rays_colored, 0.3, 0)
+            case "sepia":
+                sepia_filter = np.array([[0.272, 0.534, 0.131],
+                                         [0.349, 0.686, 0.168],
+                                         [0.393, 0.769, 0.189]])
+                sepia = cv2.transform(img, sepia_filter)
+                return np.clip(sepia, 0, 255).astype(np.uint8)
+            case "gamma_correct":
+                gamma = 1.4  # < 1.0 for darker, > 1.0 for brighter
+                inv_gamma = 1.0 / gamma
+                table = np.array([(i / 255.0) ** inv_gamma * 255 for i in range(256)]).astype("uint8")
+                return cv2.LUT(img, table)
+            # case "lens_distortion":
+            #     h, w = img.shape[:2]
+            #     K = np.array([[w, 0, w // 2], [0, w, h // 2], [0, 0, 1]], dtype=np.float32)
+            #     D = np.array([-0.3, 0.1, 0, 0])  # Distortion coefficients
+            #     map1, map2 = cv2.initUndistortRectifyMap(K, D, None, K, (w, h), cv2.CV_32FC1)
+            #     return cv2.remap(img, map1, map2, interpolation=cv2.INTER_LINEAR)
+            case "pixel_cleanup":
+                # Median blur to clean block edges + light bilateral smoothing
+                median = cv2.medianBlur(img, 3)
+                smooth = cv2.bilateralFilter(median, d=5, sigmaColor=25, sigmaSpace=25)
+                return smooth
+            case "increase_resolution":
+                scale_factor = 2  # You can expose this to the UI
+                new_size = (img.shape[1] * scale_factor, img.shape[0] * scale_factor)
+                return cv2.resize(img, new_size, interpolation=cv2.INTER_LANCZOS4)
+            case "increase_resolution_dl":
+                try:
+                    from cv2 import dnn_superres
+                    model_path = os.path.abspath(os.path.join(f"{config.VERSION}{config.VERSION_ADD}", "models", "FSRCNN_x2.pb"))
+                    if not os.path.exists(model_path):
+                        raise FileNotFoundError(f"Model not found: {model_path}")
+                    scale = 2
+
+                    sr = dnn_superres.DnnSuperResImpl_create()
+                    sr.readModel(model_path)
+                    sr.setModel("fsrcnn", scale)
+                    return sr.upsample(img)
+                except Exception as e:
+                    print(f"[Error] DL Upscale failed: {e}")
+                    return img  # Fallback: return original
+            case "adaptive_line_overlay":
+                # 1. Convert to grayscale for edge detection
+                gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+                # 2. Detect lines (black on white)
+                edges = cv2.adaptiveThreshold(gray_img, 255,
+                                              cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                              cv2.THRESH_BINARY_INV, 9, 5)
+
+                # 3. Convert to 3-channel
+                edges_bgr = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+
+                # 4. Draw black lines over original where edges exist
+                # Wherever edge == 255 → draw black on top
+                result = img.copy()
+                result[edges == 255] = [0, 0, 0]
+
+                return result
+            case "canny_line_overlay":
+                gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                edges = cv2.Canny(gray_img, 100, 200)  # Fast edge detection
+                result = img.copy()
+                result[edges == 255] = [0, 0, 0]  # Paint lines as black
+                return result
+            case "color_dodge_overlay":
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                inv = 255 - gray
+                blur = cv2.GaussianBlur(inv, (21, 21), 0)
+                dodge = cv2.divide(gray, 255 - blur, scale=256)
+
+                # Blend result on top — brighten only light areas
+                dodge = cv2.cvtColor(dodge, cv2.COLOR_GRAY2BGR)
+                return cv2.addWeighted(img, 0.75, dodge, 0.25, 0)
+            case "split_tone":
+                if len(img.shape) == 2 or img.shape[2] != 3:
+                    img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+                l, a, b = cv2.split(lab)
+                a = cv2.add(a, 10)  # Warmer shadows
+                b = cv2.subtract(b, 10)  # Cooler highlights
+                return cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
+            case "poster_edge":
+                # 1. Smooth image
+                blur = cv2.medianBlur(img, 5)
+
+                # 2. Grayscale for line detection
+                gray = cv2.cvtColor(blur, cv2.COLOR_BGR2GRAY)
+
+                # 3. Detect lines (black on white)
+                edges = cv2.adaptiveThreshold(gray, 255,
+                                              cv2.ADAPTIVE_THRESH_MEAN_C,
+                                              cv2.THRESH_BINARY_INV, 9, 5)
+
+                # 4. Dilate if you want thicker lines
+                kernel = np.ones((1, 1), np.uint8)
+                edges = cv2.dilate(edges, kernel, iterations=1)
+
+                # 5. Convert to 3-channel and draw black lines on top
+                result = blur.copy()
+                result[edges == 255] = [0, 0, 0]  # this time for real: black lines
+
+                return result
+            case "shrink_50":
+                new_size = (img.shape[1] // 2, img.shape[0] // 2)
+                return cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
+            case "shrink_25":
+                new_size = (img.shape[1] // 4, img.shape[0] // 4)
+                return cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
+            case "resize_to_1mp":
+                return self._resize_to_pixel_count(img, 1_000_000)
+            case "resize_to_2mp":
+                return self._resize_to_pixel_count(img, 2_000_000)
+            case "resize_to_4mp":
+                return self._resize_to_pixel_count(img, 4_000_000)
+            case "resize_to_8mp":
+                return self._resize_to_pixel_count(img, 8_000_000)
+            case "resize_to_12mp":
+                return self._resize_to_pixel_count(img, 12_000_000)
+            case "resize_to_16mp":
+                return self._resize_to_pixel_count(img, 16_000_000)
+            case "resize_to_20mp":
+                return self._resize_to_pixel_count(img, 20_000_000)
+            case "resize_to_24mp":
+                return self._resize_to_pixel_count(img, 24_000_000)
+            case "resize_to_28mp":
+                return self._resize_to_pixel_count(img, 28_000_000)
+            case "resize_to_32mp":
+                return self._resize_to_pixel_count(img, 32_000_000)
+            case "deblock":
+                # Use strong bilateral to smooth without killing edges
+                return cv2.bilateralFilter(img, d=9, sigmaColor=50, sigmaSpace=75)
+            case "denoise":
+                return cv2.fastNlMeansDenoisingColored(img, None, h=10, hColor=10, templateWindowSize=7, searchWindowSize=21)
+            case "smart_smooth":
+                return cv2.edgePreservingFilter(img, flags=1, sigma_s=60, sigma_r=0.4)
+        # case "hsv_boost":
+            #     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+            #     h, s, v = cv2.split(hsv)
+            #     v = cv2.equalizeHist(v)  # or cv2.normalize(v, None, 0, 255, cv2.NORM_MINMAX)
+            #     return cv2.cvtColor(cv2.merge((h, s, v)), cv2.COLOR_HSV2BGR)
+            # case "ycrcb_boost":
+            #     ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
+            #     y, cr, cb = cv2.split(ycrcb)
+            #     y = cv2.equalizeHist(y)
+            #     return cv2.cvtColor(cv2.merge((y, cr, cb)), cv2.COLOR_YCrCb2BGR)
+            # case "hls_adjust":
+            #     hls = cv2.cvtColor(img, cv2.COLOR_BGR2HLS)
+            #     h, l, s = cv2.split(hls)
+            #     l = cv2.equalizeHist(l)
+            #     return cv2.cvtColor(cv2.merge((h, l, s)), cv2.COLOR_HLS2BGR)
+            # Grayscale Variants
+            case "adaptive_threshold":
+               gray_img = gray()
+               return cv2.adaptiveThreshold(gray_img, 255,
+                                            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                            cv2.THRESH_BINARY, 11, 2)
+            case "threshold_fast":
+                gray_img = gray()
+                _, th = cv2.threshold(gray_img, 127, 255, cv2.THRESH_BINARY)
+                return th
+            case "canny_edges":
+                gray_img = gray()
+                return cv2.Canny(gray_img, 100, 200)
+            case "color_dodge":
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                inv = 255 - gray
+                blur = cv2.GaussianBlur(inv, (21, 21), 0)
+                dodge = cv2.divide(gray, 255 - blur, scale=256)
+                return cv2.cvtColor(dodge, cv2.COLOR_GRAY2BGR)
+            case "xdog":
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+                # Parameters you can tweak
+                k = 4.5  # Ratio between two Gaussian sigmas
+                gamma = 0.95  # Weighting factor for second Gaussian
+                epsilon = -0.1  # Threshold for edge enhancement
+                phi = 10  # Sharpness of tanh
+
+                # Gaussian blurs
+                g1 = cv2.GaussianBlur(gray, (0, 0), sigmaX=1)
+                g2 = cv2.GaussianBlur(gray, (0, 0), sigmaX=k)
+
+                # XDoG equation
+                dog = g1 - gamma * g2
+                dog = (dog - dog.min()) / (dog.max() - dog.min())  # Normalize to 0–1
+                xdog = np.where(dog >= epsilon, 1.0, 1.0 + np.tanh(phi * (dog - epsilon)))
+
+                return (xdog * 255).astype(np.uint8)
+            case "gradient_laplacian":
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+                # Use Laplacian to find edge magnitude
+                lap = cv2.Laplacian(gray, cv2.CV_64F, ksize=3)
+                lap = cv2.convertScaleAbs(lap)
+
+                # Threshold the laplacian to get strong edges
+                _, binary = cv2.threshold(lap, 30, 255, cv2.THRESH_BINARY)
+
+                # Optional: clean up with morphological closing
+                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+                cleaned = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+
+                return cleaned
+            case "clahe":
+                gray_img = gray()
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                return clahe.apply(gray_img)
+            case "luma_contrast":
+                gray_img = gray()
+                return cv2.equalizeHist(gray_img)
+            case "grayscale_luma":
+                return gray()
+            case "grayscale_average":
+                return np.mean(img, axis=2).astype(np.uint8) if len(img.shape) == 3 else img
+            case "kuwahara":
+                def fast_kuwahara(img, radius=4):
+                    if len(img.shape) == 2:
+                        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                    img = img.astype(np.float32)
+
+                    h, w, c = img.shape
+                    kernel_size = radius + 1
+
+                    # Precompute integral images for each channel
+                    means = []
+                    variances = []
+
+                    for dy, dx in [(0, 0), (0, 1), (1, 0), (1, 1)]:
+                        y0 = dy * radius
+                        x0 = dx * radius
+
+                        region = img[y0:h - radius + y0, x0:w - radius + x0]
+                        mean = cv2.boxFilter(region, ddepth=-1, ksize=(kernel_size, kernel_size))
+                        sqmean = cv2.boxFilter(region ** 2, ddepth=-1, ksize=(kernel_size, kernel_size))
+                        var = sqmean - mean ** 2
+
+                        means.append(mean)
+                        variances.append(var.sum(axis=2, keepdims=True))  # Variance across channels
+
+                    # Stack and select region with lowest variance
+                    var_stack = np.stack(variances, axis=-1)  # shape: (h', w', 1, 4)
+                    mean_stack = np.stack(means, axis=-1)  # shape: (h', w', 3, 4)
+
+                    best_indices = np.argmin(var_stack, axis=-1)[..., None]
+                    result = np.take_along_axis(mean_stack, best_indices, axis=3)
+                    result = result.squeeze(axis=3).astype(np.uint8)
+
+                    return result
+
+                return fast_kuwahara(img, radius=4)
+            case "bilateral_filter_soft":
+                return cv2.bilateralFilter(img, d=7, sigmaColor=45, sigmaSpace=45)
+            case "bilateral_filter":
+                # d: diameter of pixel neighborhood
+                # sigmaColor: larger = more color smoothing
+                # sigmaSpace: larger = more spatial smoothing
+                return cv2.bilateralFilter(img, d=9, sigmaColor=75, sigmaSpace=75)
+            case "bilateral_filter_strong":
+                return cv2.bilateralFilter(img, d=9, sigmaColor=100, sigmaSpace=100)
+            case "unknown_id":
+                return img
+            case _:
+                raise ValueError(f"Unknown transform: {transform_id}")
+
+    def _process_single_image(self, filename: str, input_folder: str, cache_folder: str, processing_pipeline: list[str]) -> None:
+        try:
+            ext = PLPath(filename).suffix.lower()
+            filepath = os.path.join(input_folder, filename)
+            # Use imageio for non-OpenCV-friendly formats
+            if ext in {".heic", ".heif", ".gif"}:
+                img = iio.imread(filepath)
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            else:
+                img = cv2.imread(filepath)
+            if img is None:
+                print(f"[Warning] Could not load: {filename}")
+                return
+            for transform_id in processing_pipeline:
+                img = self.apply_transform(img, transform_id)
+            out_path = os.path.join(cache_folder, filename)
+            cv2.imwrite(out_path, img)
+        except Exception as e:
+            print(f"[Error] Processing {filename}: {e}")
+
+    def process_images(self, cache_folder: str, processing_pipeline: list[str]) -> None:
+        os.makedirs(cache_folder, exist_ok=True)
+        input_folder = cache_folder
+
+        image_files = [
+            f for f in os.listdir(input_folder)
+            if PLPath(f).suffix.lower() in (".png", ".webp", ".jpg", ".jpeg", ".gif", ".heif", ".heic", ".bmp")
+        ]
+        total = len(image_files)
+        if total == 0 or len(processing_pipeline) == 0:
+            return
+
+        def process_all_images(progress_signal=None):
+            try:
+                if (getattr(self, "provider", None) and getattr(self.provider, "_shared_request_pool", None)
+                        and self.settings.get_advanced_settings().get("misc", {}).get("use_threading_for_pipeline_if_available", True)):
+                    # Parallel processing
+                    futures = [
+                        self.provider._shared_request_pool.pool.submit(
+                            self._process_single_image,
+                            filename,
+                            input_folder,
+                            cache_folder,
+                            processing_pipeline
+                        )
+                        for filename in image_files
+                    ]
+                    for i, future in enumerate(futures):
+                        future.result()  # Await each job
+                        if progress_signal:
+                            progress_signal.emit(100 * ((i + 1) / total))
+                        yield  # Let dialog update
+                else:
+                    # Fallback: sequential processing
+                    for i, filename in enumerate(image_files):
+                        self._process_single_image(
+                            filename,
+                            input_folder,
+                            cache_folder,
+                            processing_pipeline
+                        )
+                        if progress_signal:
+                            progress_signal.emit(100 * ((i + 1) / total))
+                        yield  # Let dialog update
+            except Exception as e:
+                return False
+            return True
+
+        # Run the job with a progress dialog
+        progress_dialog = CustomProgressDialog(
+            self,
+            window_title="Processing Images...",
+            new_thread=True,
+            func=process_all_images,
+            args=(),
+            kwargs={}
+        )
+
+        progress_dialog.exec()
+        self.task_successful = progress_dialog.task_successful
+
     def chapter_loading_wrapper(self, func, cache_folder, fail_info, fail_text):
         self.threading_wrapper(True, True, func, args=(cache_folder,))
 
@@ -1563,15 +2037,16 @@ class MainWindow(QMainWindow):
         self.chapter_selector.setText(str(self.settings.get_chapter()))
         # self.gui_changing = False
         print("Reloading images ...")
+        self.process_images(cache_folder, self.settings.get_advanced_settings().get("misc", {}).get("image_processing_pipeline", []))
         self.scrollarea.verticalScrollBar().setValue(0)
         self.scrollarea.horizontalScrollBar().setValue((self.scrollarea.width() // 2))
         self.reload_content()
-        self.save_last_title(self.provider.__class__.__name__.removesuffix("Provider"), self.provider.get_title(), self.settings.get_chapter())
+        self.save_last_title(self.provider.register_provider_name, self.provider.get_title(), self.settings.get_chapter())
         if self.settings.get_advanced_settings().get("misc", {}).get("auto_export", False):
             if self.library_edit.current_library()[1] == "":
                 QMessageBox.warning(self, "No library selected", "Please select a library to enable \nthe transfer of chapters.")
                 return
-            elif self.provider.saver is not None:
+            elif self.provider.register_saver is not None:
                 return  # So we don't save the same chapter over and over, destroying it's quality
             elif self.transferring:
                 return

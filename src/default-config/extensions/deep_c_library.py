@@ -5,10 +5,12 @@ import shutil
 import tempfile
 from datetime import datetime
 
+import cv2
+import numpy as np
 from PIL import Image
 from PySide6.QtCore import Signal
 
-from core.modules.ProviderPlugin import CoreProvider, LibraryProvider, ProviderImage, CoreSaver, LibrarySaver
+from core.modules.LibraryPlugin import CoreProvider, LibraryProvider, ProviderImage, CoreSaver, LibrarySaver
 import typing as _ty
 
 import ffmpeg
@@ -172,77 +174,94 @@ class DeepCSaver(LibrarySaver):
             if os.path.isfile(os.path.join(chapter_img_folder, f))
         ])
 
+        MAX_HEIGHT = 15000
         images = []
         sizes = set()
-        for idx, file in enumerate(image_files):
+        max_width = 0
+        total_height = 0
+        resized_paths = []
+
+        # Step 1: Load all images and record sizes
+        for idx, path in enumerate(image_files):
             try:
-                img = Image.open(file)
+                img = cv2.imread(path)
+                if img is None:
+                    raise ValueError("Failed to load")
+                h, w = img.shape[:2]
                 images.append(img)
-                sizes.add(img.size)
+                sizes.add((w, h))
+                max_width = max(max_width, w)
+                total_height += h
             except Exception as e:
-                print(f"Failed to load image {file}: {e}")
+                print(f"[Error] {path}: {e}")
 
             if progress_signal:
                 percent = 10 + int((idx + 1) / len(image_files) * 5)
                 progress_signal.emit(percent)
-                yield  # Yield control
+                yield
 
         if not images:
             yield
             return False  # Nothing to save
 
-        # Determine common size (crop to smallest WxH)
-        if len(sizes) > 1:
-            # Combine vertically
-            max_width = max(w for w, h in sizes)
-            total_height = sum(img.height for img in images)
-            combined = Image.new("RGB", (max_width, total_height))
-            y_offset = 0
+        if len(sizes) == 1:  # Case 1: All images same size > save directly
+            for idx, img in enumerate(images):
+                out_path = os.path.join(chapter_folder, f"{idx:03}.png")
+                cv2.imwrite(out_path, img)
+                resized_paths.append(out_path)
+
+                if progress_signal:
+                    progress = 15 + int((idx + 1) / len(images) * 5)
+                    progress_signal.emit(progress)
+                    yield  # Yield control
+        else:  # Case 2: Images differ > pad, stack, slice
+            padded_images = []
             for img in images:
-                # Align width by padding (optional) or cropping (safe)
-                if img.width != max_width:
-                    aspect_ratio = img.height / img.width
-                    new_height = int(max_width * aspect_ratio)
-                    img = img.resize((max_width, new_height), Image.Resampling.LANCZOS)
-                combined.paste(img, (0, y_offset))
-                y_offset += img.height
+                h, w = img.shape[:2]
+                if w < max_width:
+                    pad = max_width - w
+                    img = cv2.copyMakeBorder(img, 0, 0, 0, pad, cv2.BORDER_CONSTANT, value=(255, 255, 255))
+                padded_images.append(img)
 
-            # Ideal 9:16 aspect ratio
-            target_ratio = 9 / 16
-            best_height = total_height
-            best_chunk_height = None
-            for n in range(1, len(images) + 20):
-                chunk_height = total_height // n
-                if chunk_height == 0:
-                    break
-                if abs((max_width / chunk_height) - target_ratio) < 0.2:  # Acceptable deviation
-                    best_chunk_height = chunk_height
-                    break
-            if best_chunk_height is None:
-                best_chunk_height = total_height // len(images)
+            # Stack vertically
+            combined = np.vstack(padded_images)
+            total_height = combined.shape[0]
 
-            num_chunks = total_height // best_chunk_height
-            resized_paths = []
+            # Determine slicing strategy (try to approximate ideal aspect ratio)
+            # target_ratio = 9 / 16  # TODO: Step through the number of imgs and get the best one till they're over 15k
+            best_chunk_height: int = total_height
+            n: int = 2  # As we already have best chunk height = total height
+            while best_chunk_height > MAX_HEIGHT:  # <=
+                best_chunk_height = total_height // n
+                n += 1
+
+            # for n in range(1, len(images) + 20):
+            #     chunk_height = total_height // n
+            #     if chunk_height == 0:
+            #         break
+            #     if abs((max_width / chunk_height) - target_ratio) < 0.2:
+            #         best_chunk_height = chunk_height
+            #         break
+            # if best_chunk_height is None:
+            #     best_chunk_height = total_height // len(images)
+            #
+            # # Clamp height to MAX_HEIGHT
+            # best_chunk_height = min(best_chunk_height, MAX_HEIGHT)
+
+            # Recalculate chunk count
+            # num_chunks = (total_height + best_chunk_height - 1) // best_chunk_height
+            num_chunks: int = int(round(total_height / best_chunk_height, 0))
+
             for i in range(num_chunks):
                 top = i * best_chunk_height
-                bottom = top + best_chunk_height
-                box = (0, top, max_width, bottom)
+                bottom = min(top + best_chunk_height, total_height)
+                chunk = combined[top:bottom]
                 out_path = os.path.join(chapter_folder, f"{i:03}.png")
-                combined.crop(box).save(out_path)
+                cv2.imwrite(out_path, chunk)
                 resized_paths.append(out_path)
 
                 if progress_signal:
                     progress = 15 + int((i + 1) / num_chunks * 5)
-                    progress_signal.emit(progress)
-                    yield  # Yield control
-        else:
-            resized_paths = []
-            for idx, img in enumerate(images):
-                out_path = os.path.join(chapter_folder, f"{idx:03}.png")
-                img.save(out_path)
-                resized_paths.append(out_path)
-                if progress_signal:
-                    progress = 15 + int((idx + 1) / len(images) * 5)
                     progress_signal.emit(progress)
                     yield  # Yield control
 
@@ -348,7 +367,7 @@ def extract_chapter_images(chapter_file: str, output_dir: str, fps: int) -> None
 class DeepCLibraryProvider(LibraryProvider):
     register_provider_name: str = "DeepC Lib (FFmpeg)"
     register_provider_id: str = "deep_c_lib"
-    saver = DeepCSaver
+    register_saver = DeepCSaver
 
     def __init__(self, title: str, chapter: int, library_path: str, logo_folder: str) -> None:
         logo = ProviderImage("logo_deepclibrary", "png", "base64", "data:image/png;base64,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")
@@ -356,7 +375,7 @@ class DeepCLibraryProvider(LibraryProvider):
         super().__init__(title, chapter, library_path, logo_folder, logo, icon)
         self.clipping_space = None
 
-    def _load_current_chapter(self, progress_queue=None) -> bool:
+    def _load_current_chapter(self) -> _ty.Generator[int, None, bool]:
         if shutil.which("ffmpeg") is None:
             system = platform.system()
             install_help = "-> Unknown operating system"
@@ -374,12 +393,14 @@ class DeepCLibraryProvider(LibraryProvider):
                        install_help)
             for part in message:
                 print(part)
+            yield 0
             return False
         chapter_number_str = str(float(self._chapter))  # Match saved mkv filename
         data_path = os.path.join(self._content_path, "data.json")
 
         if not os.path.isfile(data_path):
             print("Missing data.json")
+            yield 0
             return False
 
         try:
@@ -387,6 +408,7 @@ class DeepCLibraryProvider(LibraryProvider):
                 data = json.load(f)
         except Exception as e:
             print(f"Failed to read data.json: {e}")
+            yield 0
             return False
 
         # Locate chapter entry
@@ -396,6 +418,7 @@ class DeepCLibraryProvider(LibraryProvider):
         )
         if not chapter_data:
             print(f"Chapter {chapter_number_str} not found in data.json")
+            yield 0
             return False
 
         video_path = os.path.join(self._content_path, chapter_data["location"])
@@ -423,6 +446,7 @@ class DeepCLibraryProvider(LibraryProvider):
             extract_chapter_images(video_path, output_dir=self._current_cache_folder, fps=fps)
         except Exception as e:
             print(f"Failed to extract chapter images: {e}")
+            yield 0
             return False
 
         # Count how many images were extracted
@@ -431,12 +455,13 @@ class DeepCLibraryProvider(LibraryProvider):
             if os.path.isfile(os.path.join(self._current_cache_folder, f))
         ])
         if not image_files:
+            yield 0
             return False
 
         total = len(image_files)
         for idx in range(total):
-            if progress_queue:
-                progress_queue.put(int((idx + 1) / total * 100))
+            yield int((idx + 1) / total * 100)  # Yield control
 
         print(f"Loaded and extracted {total} images for chapter {chapter_number_str}")
+        yield 100  # Yield control
         return True

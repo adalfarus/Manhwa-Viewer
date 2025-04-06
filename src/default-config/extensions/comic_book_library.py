@@ -5,7 +5,7 @@ from datetime import datetime
 from PIL import Image
 from PySide6.QtCore import Signal
 
-from core.modules.ProviderPlugin import CoreProvider, LibraryProvider, ProviderImage, CoreSaver, LibrarySaver
+from core.modules.LibraryPlugin import CoreProvider, LibraryProvider, ProviderImage, CoreSaver, LibrarySaver
 import typing as _ty
 
 import zipfile
@@ -59,8 +59,9 @@ class ComicBookSaver(LibrarySaver):
     archive_format = "cbz"
 
     @classmethod
-    def save_chapter(cls, provider, chapter_number, chapter_title, chapter_img_folder,
-                     quality_present, progress_signal: Signal | None = None) -> _ty.Generator[None, None, bool]:
+    def save_chapter(cls, provider: "CoreProvider", chapter_number: str, chapter_title: str, chapter_img_folder: str,
+                     quality_present: _ty.Literal["best_quality", "quality", "size", "smallest_size"],
+                     progress_signal: Signal | None = None) -> _ty.Generator[None, None, bool]:
         ret_val = super()._ensure_valid_chapter(provider, chapter_number, chapter_title, chapter_img_folder, quality_present)
         if not ret_val:
             yield
@@ -230,7 +231,7 @@ def extract_archive(archive_path, extract_to):
 class ComicBookLibraryProvider(LibraryProvider):
     register_provider_name: str = "Comic Book (CBZ/7/R/T)"
     register_provider_id: str = "comic_book_lib"
-    saver = ComicBookSaver
+    register_saver = ComicBookSaver
 
     def __init__(self, title: str, chapter: int, library_path: str, logo_folder: str) -> None:
         logo = ProviderImage("logo_comicbooklibrary", "png", "base64", "data:image/png;base64,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")

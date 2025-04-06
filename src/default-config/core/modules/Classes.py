@@ -104,7 +104,7 @@ class Settings:
             "hide_scrollbar": "False",
             "stay_on_top": "False",
             "geometry": "100, 100, 640, 480",
-            "advanced_settings": '{"recent_titles": [], "themes": {"light": "light_light", "dark": "light_dark", "font": "Segoe UI"}, "settings_file_path": "", "settings_file_mode": "overwrite", "misc": {"auto_export": false, "quality_preset": "quality", "max_cached_chapters": -1}}',
+            "advanced_settings": '{"recent_titles": [], "themes": {"light": "light_light", "dark": "light_dark", "font": "Segoe UI"}, "settings_file_path": "", "settings_file_mode": "overwrite", "misc": {"auto_export": false, "quality_preset": "quality", "max_cached_chapters": -1, "use_threading_for_pipeline_if_available": true, "image_processing_pipeline": []}}',
             "chapter_rate": "1.0",
             "no_update_info": "True",
             "not_recommened_update_info": "True",

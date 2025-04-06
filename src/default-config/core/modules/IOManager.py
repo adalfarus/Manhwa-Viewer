@@ -62,6 +62,7 @@ class IOManager:
         self._logger = ActLogger(log_to_file=True, filename=os.path.join(logs_folder_path, "latest.log"))
         self._logger.monitor_pipe(sys.stdout, level=logging.DEBUG)
         self._logger.monitor_pipe(sys.stderr, level=logging.ERROR)
+        # Replace fancy characters
         self._is_indev.set_value(is_indev)
 
     def set_logging_level(self, level: int) -> None:

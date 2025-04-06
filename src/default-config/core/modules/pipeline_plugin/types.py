@@ -1,0 +1,5 @@
+"""TBA"""
+glUniform1iType = "int"
+glUniform1fType = "float"
+glUniform3fType = "vec3"
+glUniform2fType = "vec2"
