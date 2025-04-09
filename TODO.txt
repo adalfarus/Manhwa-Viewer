@@ -7,14 +7,28 @@ Todo:
 - Make Theme Progressbar to be thicker
 - Update update check (check list for every [major minor patch, dev stage e.g. b2], combination it wants to be reminded of)
  -> scrape new updates from github releases instead of a json file
+- Implement better shader system
+- Enable method to disable certain inputs (called everytime an input changes)
+- Chromatic aberration
+
+- OTHER PROVS:
+ -> Mangapark
+ -> Luacomic
+ -> https://whalemanga.com
 
 Not planned:
+- should automatic downscale be mega pixel based? -> No because we do not say "This is quality and this isn't" but relative to currently, this is quality
 - Make it possible to transfer from one library to another by reusing can use library as can use title as path?
 -> Too deep for normal people to understand, would have to select uuid4 folder of the title as the path, which is hard if you don't understand it in-depth
 - Make library providers compatible with one another? How to solve different provider for different chapters?
 - execute similar commands (like 3x double res) in one go. This would only be useful when the image is literally 3 by 3 px large
 
 Done:
+- Only clean own appdata folder like "175b1"
+- Test out widgets other than slider and combobox  -> fixed them
+- Is vert shader executed? If yes why isnt the image flipped each time?
+- Upgrade image pipeline with opengl shaders
+- Make all library savers use opencv instead of pillow
 - Add black and white transform mode for saving
  -> Massively reduces file-size and compression time
 - image shrinking,

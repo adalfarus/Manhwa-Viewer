@@ -1,4 +1,6 @@
 """TBA"""
+import cv2
+import numpy as np
 from PySide6.QtCore import Signal
 from aplustools.web.request import UnifiedRequestHandler
 from playwright.sync_api import sync_playwright, Error as PlaywrightError, Playwright, Browser
@@ -10,13 +12,13 @@ from urllib.parse import urljoin, urlparse
 from abc import ABCMeta, abstractmethod
 from bs4 import BeautifulSoup
 from queue import Queue
-import subprocess
+# import subprocess
 import threading
 import requests
 import urllib3
 import json
 import uuid
-import time
+# import time
 import re
 import os
 
@@ -83,7 +85,7 @@ class CoreSaver(metaclass=ABCMeta):
     @classmethod
     @abstractmethod
     def save_chapter(cls, provider: "CoreProvider", chapter_number: str, chapter_title: str, chapter_img_folder: str,
-                     quality_present: _ty.Literal["best_quality", "quality", "size", "smallest_size"],
+                     quality_present: _ty.Literal["maximum_quality", "high_quality", "quality", "size", "smaller_size", "smallest_size", "fast_read", "archival"],
                      progress_signal: Signal | None = None) -> _ty.Generator[None, None, bool]:
         ...
 
@@ -123,6 +125,7 @@ class CoreProvider(metaclass=ABCMeta):
         self._chapter: float = chapter
         self._library_path: str = library_path
         self._current_cache_folder: str | None = None
+        self._convert_to_lossless_format: bool | None = None
         self._logo_folder: str = logo_folder
         self.clipping_space: tuple[int, int] | None = None
 
@@ -163,8 +166,13 @@ class CoreProvider(metaclass=ABCMeta):
     def increase_chapter(self, by: float) -> None:
         self._chapter += by
 
-    def load_current_chapter(self, current_cache_folder: str, progress_signal: Signal | None = None) -> _ty.Generator[None, None, bool]:
+    def save_as_lossless(self, img: np.ndarray, path: str, img_name: str) -> None:
+        # cv2.imwrite(os.path.join(path, f"{img_name}.webp"), img, [cv2.IMWRITE_WEBP_QUALITY, 100])
+        cv2.imwrite(os.path.join(path, f"{img_name}.png"), img, [cv2.IMWRITE_PNG_COMPRESSION, 3])
+
+    def load_current_chapter(self, current_cache_folder: str, convert_to_lossless_format: bool, progress_signal: Signal | None = None) -> _ty.Generator[None, None, bool]:
         self._current_cache_folder = current_cache_folder
+        self._convert_to_lossless_format = convert_to_lossless_format
         gen = self._load_current_chapter()
         try:
             while True:
@@ -175,7 +183,7 @@ class CoreProvider(metaclass=ABCMeta):
         except StopIteration as e:
             ret_val = e.value
         finally:
-            self._current_cache_folder = None
+            self._current_cache_folder = self._convert_to_lossless_format = None
         return bool(ret_val)
 
     @abstractmethod
@@ -186,12 +194,12 @@ class CoreProvider(metaclass=ABCMeta):
     def get_search_results(self, search_text: str | None) -> bool | list[tuple[str, str]]:
         ...
 
-    def _download_logo_image(self, url_or_data: str, new_name: str, img_format: str, img_type: _ty.Literal["url", "base64"]):
-        image: OnlineImage = OnlineImage(url_or_data)
-        if img_type == "url":
-            image.download_image(self._logo_folder, url_or_data, new_name, img_format)
-        elif img_type == "base64":  # Moved data to the back to avoid using keyword arguments
-            image.base64(self._logo_folder, new_name, img_format, url_or_data)
+    # def _download_logo_image(self, url_or_data: str, new_name: str, img_format: str, img_type: _ty.Literal["url", "base64"]):
+    #     image: OnlineImage = OnlineImage(url_or_data)
+    #     if img_type == "url":
+    #         image.download_image(self._logo_folder, url_or_data, new_name, img_format)
+    #     elif img_type == "base64":  # Moved data to the back to avoid using keyword arguments
+    #         image.base64(self._logo_folder, new_name, img_format, url_or_data)
 
     def is_working(self) -> bool:
         return True
@@ -286,7 +294,7 @@ class LibrarySaver(CoreSaver, metaclass=ABCMeta):
 
     @classmethod
     def _ensure_valid_chapter(cls, provider: CoreProvider, chapter_number: str, chapter_title: str, chapter_img_folder: str,
-                     quality_present: _ty.Literal["best_quality", "quality", "size", "smallest_size"]) -> bool:
+                     quality_present: _ty.Literal["maximum_quality", "high_quality", "quality", "size", "smaller_size", "smallest_size", "fast_read", "archival"]) -> bool:
         if not cls._should_work(provider.get_library_path()):
             return False
         cid = cls._find_content_folder(provider.get_title(), provider.get_library_path())
@@ -700,8 +708,17 @@ class OnlineProvider(CoreProvider, metaclass=ABCMeta):
             if content:
                 filename = f"{str(count).zfill(3)}.{url_base.split('.')[-1]}"
                 file_path = os.path.join(self._current_cache_folder, filename)
-                with open(file_path, "wb") as f:
-                    f.write(content)
+                if self._convert_to_lossless_format:
+                    img_array = np.frombuffer(content, dtype=np.uint8)
+                    img = cv2.imdecode(img_array, cv2.IMREAD_UNCHANGED)
+                    if img is None or img.size == 0:
+                        print(f"[Warning] Could not decode image at index {i}")
+                        continue
+                    name = os.path.splitext(os.path.basename(file_path))[0]
+                    self.save_as_lossless(img, os.path.dirname(file_path), name)
+                else:
+                    with open(file_path, 'wb') as f:
+                        f.write(content)
                 self._downloaded_images_count += 1
                 progress = int((self._downloaded_images_count / self._total_images) * 100)
                 yield progress
@@ -770,8 +787,17 @@ class OnlineProvider(CoreProvider, metaclass=ABCMeta):
         # Step 6: Save images to disk
         for i, (file_path, data) in enumerate(zip(file_paths, result)):
             if data:
-                with open(file_path, 'wb') as f:
-                    f.write(data)
+                if self._convert_to_lossless_format:
+                    img_array = np.frombuffer(data, dtype=np.uint8)
+                    img = cv2.imdecode(img_array, cv2.IMREAD_UNCHANGED)
+                    if img is None or img.size == 0:
+                        print(f"[Warning] Could not decode image at index {i}")
+                        continue
+                    name = os.path.splitext(os.path.basename(file_path))[0]
+                    self.save_as_lossless(img, os.path.dirname(file_path), name)
+                else:
+                    with open(file_path, 'wb') as f:
+                        f.write(data)
                 self._downloaded_images_count += 1
                 progress = int((self._downloaded_images_count / self._total_images) * 100)
                 yield progress

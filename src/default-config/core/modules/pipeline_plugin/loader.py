@@ -1,5 +1,6 @@
 """TBA"""
 import importlib.util
+import json
 import traceback
 import os
 
@@ -15,6 +16,7 @@ class PipelineEffectModule:
         self.name: str = name
         self.module: _ts.ModuleType = plugin
         self.effect_name: str = plugin.effect_name  # UI display name
+        self.effect_name_format: str = plugin.effect_name_format  # To see settings at a glance
         self.effect_id: str = plugin.effect_id      # used in saved pipelines
         self.cpu_supported: bool = plugin.supports_cpu
         self.gpu_supported: bool = plugin.supports_opengl
@@ -24,6 +26,25 @@ class PipelineEffectModule:
             "frag": os.path.join(base_path, plugin.fragment_shader_src),
         } if self.gpu_supported else None
         self.cpu_function: _ts.FunctionType | None = getattr(plugin, "apply_transform_cpu", None)
+        self.gui_update_function: _ts.FunctionType = getattr(plugin, "update_gui")
+
+    def get_default_settings(self) -> dict[str, _ty.Any]:
+        return {
+            key: inp.default
+            for key, inp in self.register_gui_inputs.items()
+        }
+
+    def get_preprocessing_funcs(self) -> dict[str, _ty.Callable[[_ty.Any], _ty.Any]]:
+        return {
+            key: inp.preprocessing_func
+            for key, inp in self.register_gui_inputs.items()
+        }
+
+    def get_gl_types(self) -> dict[str, str]:
+        return {
+            key: inp.gl_type
+            for key, inp in self.register_gui_inputs.items()
+        }
 
 
 class PipelineEffectLoader:
@@ -31,13 +52,22 @@ class PipelineEffectLoader:
         self.verified_modules: dict[str, PipelineEffectModule] = {}
 
     def load_from_folder(self, plugins_dir: str) -> None:
-        for entry in os.listdir(plugins_dir):
+        self.verified_modules.clear()
+
+        order_file = os.path.join(plugins_dir, "effect_order.json")
+        if os.path.exists(order_file):
+            with open(order_file, "r", encoding="utf-8") as f:
+                folder_order = json.load(f)
+        else:
+            folder_order = os.listdir(plugins_dir)
+
+        for entry in folder_order:
             plugin_dir = os.path.join(plugins_dir, entry)
             if not os.path.isdir(plugin_dir):
                 continue
             try:
                 module = self._load_plugin(plugin_dir, entry)
-                self.verified_modules[entry] = module
+                self.verified_modules[module.effect_id] = module
                 print(f"[✓] Loaded effect: {entry}")
             except Exception as e:
                 print(f"[✗] Failed to load '{entry}': {e}")
@@ -53,10 +83,11 @@ class PipelineEffectLoader:
         spec.loader.exec_module(plugin)
 
         effect_name = getattr(plugin, "effect_name", None)
+        effect_name_format = getattr(plugin, "effect_name_format", None)
         effect_id = getattr(plugin, "effect_id", None)
 
-        if not isinstance(effect_name, str) or not isinstance(effect_id, str):
-            raise ValueError("Plugin must define string 'effect_name' and 'effect_id'")
+        if not isinstance(effect_name, str) or not isinstance(effect_name_format, str) or not isinstance(effect_id, str):
+            raise ValueError("Plugin must define string 'effect_name', 'effect_name_format', and 'effect_id'")
 
         # Validate core properties
         supports_opengl = getattr(plugin, "supports_opengl", False)
@@ -82,7 +113,10 @@ class PipelineEffectLoader:
 
         # CPU function optional but must exist if supports_cpu is set
         if supports_cpu and not hasattr(plugin, "apply_transform_cpu"):
-            raise AttributeError("CPU plugin must implement apply_transform_cpu(img, **kwargs)")
+            raise AttributeError("CPU plugin must implement apply_transform_cpu(img: np.ndarray, **kwargs)")
+
+        if not hasattr(plugin, "update_gui"):
+            raise AttributeError("Plugin must implement update_gui(gui_widgets: dict[str, QWidget | Widget]) -> None")
 
         # Return wrapped module
         return PipelineEffectModule(

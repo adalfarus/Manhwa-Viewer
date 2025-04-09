@@ -1,5 +1,5 @@
 """TBA"""
-from core.modules.LibraryPlugin import ManhwaLikeProvider, ProviderImage, slugify
+from modules.LibraryPlugin import ManhwaLikeProvider, ProviderImage, slugify
 from urllib.parse import urlparse, urlunparse
 from bs4 import BeautifulSoup
 import requests

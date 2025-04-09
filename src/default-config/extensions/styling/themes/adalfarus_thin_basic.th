@@ -1,0 +1,182 @@
+extending adalfarus::base;
+Default/os/new_st
+
+/* Start of QSS */
+QWidget {
+    color: $color_primary;
+    background-color: $background_primary;
+}
+QWidget:disabled {
+    color: $color_disabled;
+    background-color: $background_disabled;
+}
+QComboBox {
+    border: 1px solid $border_primary;
+    border-radius: 5px;
+    padding: 5px;
+    background-color: $background_secondary;
+    selection-background-color: $selection_background;
+    /* selection-color: $selection_color; (white and black) */
+}
+QComboBox::drop-down {
+    border: none;
+    background: transparent;
+}
+QComboBox::down-arrow {
+    image: $dropdown_image;
+}
+QComboBox QAbstractItemView {
+    border: 1px solid $border_primary;
+    background-color: $background_secondary;
+    border-radius: 5px;
+    margin-top: -5px;
+}
+QCheckBox{
+    /*background-color: $background_secondary;*/
+    border-radius: 5px;
+}
+QLabel {
+    border-radius: 5px;
+    padding: 5px;
+    background-color: $background_tertiary; /*Before #d0d0d0, made it 6 lighter for light*/
+}
+QPushButton {
+    border: 1px solid $border_primary;
+    border-radius: 5px;
+    padding: 5px;
+    background-color: $background_secondary;
+}
+QToolButton {
+    border: 1px solid $border_primary;
+    border-radius: 5px;
+    background-color: $background_secondary;
+}
+QPushButton:hover, QToolButton:hover {
+    background-color: $selection_background;
+}
+
+QScrollBar:horizontal {
+    border: none;
+    background-color: $background_scrollbar;
+    height: 15px;
+    border-radius: 7px;
+}
+QScrollBar::handle:horizontal {
+    background-color: $background_secondary;
+    min-height: 15px;
+    min-width: 40px;
+    border-radius: 7px;
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal,
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+    border: none;
+    background: none;
+}
+
+QScrollBar:vertical {
+    border: none;
+    background-color: transparent;
+    width: 15px;
+    border-radius: 7px;
+    /*border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;*/
+}
+QScrollBar::handle:vertical {
+    background-color: $background_secondary;
+    min-height: 20px;
+    border-radius: 7px;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    border: none;
+    background: none;
+}
+
+QScrollBar::handle:hover {
+    background-color: $selection_background;
+}
+QScrollBar::corner {
+    background: none;
+    border: none;
+}
+QSlider {
+    border-radius: 5px;
+    padding: 0px;
+    background: $background_tertiary;
+}
+QSlider::groove:horizontal {
+    border-radius: 3px;
+    background: #007bff;
+    height: 6px;
+    margin: 2px 10px;
+}
+QSlider::add-page:horizontal {
+    border-radius: 3px;
+    background: $background_secondary;
+    height: 6px;
+    margin: 2px 10px 2px 2px; /* top, right, bottom, left */
+}
+QSlider::handle:horizontal {
+    background: $selection_background;
+    border: 1px solid $border_primary;
+    width: 14px;
+    height: 14px;
+    border-radius: 7px;
+    margin: -5px 0px;
+}
+QMenuBar {
+    padding: 2px;
+    background-color: $background_secondary;
+    border: 1px solid $border_primary;
+    border-bottom-left-radius: 10px;
+    border-bottom-right-radius: 10px;
+}
+QMenu {
+    padding: 5px;
+    background-color: $background_secondary;
+    border: 1px solid $border_primary;
+    border-radius: 10px;
+}
+QMenuBar::item, QMenu::item {
+    padding: 2px 10px;
+    margin: 2px 2px; /* Space between items without affecting background */
+    //border: 1px solid $border_primary;
+    border-radius: 5px;
+    background-color: $background_tertiary;
+}
+QMenuBar::item:selected, QMenu::item:selected {
+    background-color: $selection_background;
+}
+QMenu::indicator {
+    width: 12px;
+    height: 12px;
+    background-color: $background_secondary;
+    border-radius: 3px;
+}
+QMenu::indicator:checked {
+    background-color: $background_secondary;
+    image: $checkbox_image;
+}
+QMenu::indicator:unchecked {
+    background-color: $background_secondary;
+    image: none;
+}
+/* End of QSS */
+
+ph:
+color_primary~=QPalette.Text;
+background_primary~=QPalette.ToolTipBase;
+color_disabled~=darkGray;
+background_disabled~=QPalette.ToolTipBase;
+border_primary~=darkGray;
+background_secondary~=QPalette.ToolTipBase;
+selection_background~=QPalette.Mid;
+background_tertiary~=QPalette.ToolTipBase;
+background_scrollbar~=transparent; // Stays
+dropdown_image~=url();
+checkbox_image~=url();
+play_button~=url("data/assets/icons/play_button.png");
+stop_button~=url("data/assets/icons/stop_button.png");
+next_button~=url("data/assets/icons/next_button.png");
+menu_icon~=url();
+info_icon~=url();

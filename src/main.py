@@ -1,6 +1,10 @@
 """TBA"""
+from PySide6.QtOpenGLWidgets import QOpenGLWidget
+from aplustools.package.timid import TimidTimer
+
 # Copyright adalfarus 2025
 import config
+from modules.pipeline_plugin.shader_executor import run_opengl_pipeline_batch
 
 config.check()
 config.setup()
@@ -12,7 +16,8 @@ from PySide6.QtWidgets import (QApplication, QLabel, QVBoxLayout, QWidget, QMain
                                QSpinBox, QPushButton, QGraphicsOpacityEffect, QScrollerProperties, QFrame, QFormLayout,
                                QLineEdit, QMessageBox, QScrollBar, QGraphicsProxyWidget, QCheckBox, QToolButton,
                                QFileDialog, QInputDialog, QSizePolicy)
-from PySide6.QtGui import QDesktopServices, QPixmap, QIcon, QDoubleValidator, QFont, QImage
+from PySide6.QtGui import QDesktopServices, QPixmap, QIcon, QDoubleValidator, QFont, QImage, QSurfaceFormat, QPainter, \
+    QPixmapCache
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QRect, QUrl, QSize
 from PySide6.QtGui import QColor
 
@@ -20,7 +25,7 @@ from modules.LibraryPlugin import CoreProvider, CoreSaver
 from modules.Classes import Settings, AutoProviderManager, CacheManager
 from modules.themes import Themes
 from modules.IOManager import IOManager
-from modules.pipeline_plugin.loader import PipelineEffectLoader
+from modules.pipeline_plugin.loader import PipelineEffectLoader, PipelineEffectModule
 
 from modules.gui import (CustomComboBox, AdvancedSettingsDialog, TransferDialog, TutorialPopup, WaitingDialog,
                               LibraryEdit)
@@ -70,14 +75,13 @@ class MainWindow(QMainWindow):
             self.transferring = False
 
             self.data_folder = os.path.abspath("data").strip("/")
-            self.caches_folder = os.path.abspath("caches").strip("/")
+            self.caches_folder = os.path.abspath("data/caches").strip("/")
             self.modules_folder = os.path.abspath(f"{config.VERSION}{config.VERSION_ADD}/core/modules").strip("/")
-            self.extensions_folder = os.path.abspath(f"{config.VERSION}{config.VERSION_ADD}/extensions").strip("/")
+            self.library_extensions_folder = os.path.abspath(f"{config.VERSION}{config.VERSION_ADD}/extensions/library").strip("/")
+            self.pipeline_extensions_folder = os.path.abspath(f"{config.VERSION}{config.VERSION_ADD}/extensions/pipeline_effects").strip("/")
+            self.styling_extensions_folder = os.path.abspath(f"{config.VERSION}{config.VERSION_ADD}/extensions/pipeline_effects").strip("/")
 
             self.cache_manager: CacheManager = CacheManager(self.caches_folder)
-
-            for folder in (self.data_folder, self.modules_folder, self.extensions_folder):
-                os.makedirs(folder, exist_ok=True)
 
             # Setup IOManager
             self.io_manager: IOManager = IOManager()
@@ -93,7 +97,7 @@ class MainWindow(QMainWindow):
             self.system = System()
 
             self.setWindowTitle(f"Super Manhwa Viewer {str(config.VERSION) + config.VERSION_ADD}")
-            self.abs_window_icon_path: str = f"{self.data_folder}/Untitled-1-noBackground.png"
+            self.abs_window_icon_path: str = f"{self.data_folder}/assets/Untitled-1-noBackground.png"
             self.setWindowIcon(QIcon(self.abs_window_icon_path))
 
             db_path = f"{self.data_folder}/data.db"
@@ -109,13 +113,14 @@ class MainWindow(QMainWindow):
             x, y, height, width = self.settings.get_geometry()
             self.setGeometry(x, y + 31, height, width)  # Somehow saves it as 31 pixels less
             self.setup_gui()
+            self.update_scene_renderer(self.settings.get_advanced_settings()["misc"]["use_opengl_scene_renderer"])
             if os.path.isdir(input_path):
                 self.library_edit.add_library_item(os.path.basename(input_path), input_path)
             self.update_theme(self.os_theme.lower())
 
             # Advanced setup
             self.provider: CoreProvider | None = None
-            self.provider_list: list[CoreProvider] = []
+            self.provider_list: list[_ty.Type[CoreProvider]] = []
             self.saver_list: list[CoreSaver] = []
             self.provider_combobox.currentIndexChanged.disconnect()
             self.known_working_searchers = []
@@ -330,7 +335,7 @@ class MainWindow(QMainWindow):
         # Add a transparent image on the top left
         self.transparent_image = QLabel(self)
         self.transparent_image.setObjectName("transparentImage")
-        self.transparent_image.setPixmap(QPixmap(os.path.abspath(f"{self.data_folder}/empty.png")))
+        self.transparent_image.setPixmap(QPixmap(os.path.abspath(f"{self.data_folder}/assets/empty.png")))
         self.transparent_image.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         opacity = QGraphicsOpacityEffect(self.transparent_image)
         opacity.setOpacity(0.5)  # Adjust the opacity level
@@ -338,7 +343,7 @@ class MainWindow(QMainWindow):
         self.transparent_image.setAttribute(Qt.WA_TransparentForMouseEvents, True)
 
         # Menu Button
-        self.menu_button = QPushButton(QIcon(f"{self.data_folder}/empty.png"), "", self)  # .centralWidget()
+        self.menu_button = QPushButton(QIcon(f"{self.data_folder}/assets/empty.png"), "", self)  # .centralWidget()
         self.menu_button.setFixedSize(40, 40)
 
         # Search Toggle Button
@@ -422,8 +427,8 @@ class MainWindow(QMainWindow):
 
         previous_chapter_button_side_menu = QPushButton("Previous")
         next_chapter_button_side_menu = QPushButton("Next")
-        self.reload_chapter_button = QPushButton(QIcon(f"{self.data_folder}/empty.png"), "")
-        self.reload_content_button = QPushButton(QIcon(f"{self.data_folder}/empty.png"), "")
+        self.reload_chapter_button = QPushButton(QIcon(f"{self.data_folder}/assets/empty.png"), "")
+        self.reload_content_button = QPushButton(QIcon(f"{self.data_folder}/assets/empty.png"), "")
 
         side_menu_buttons_layout = QHBoxLayout()
         side_menu_buttons_layout.addWidget(previous_chapter_button_side_menu)
@@ -516,6 +521,12 @@ class MainWindow(QMainWindow):
         advanced_settings_button = QPushButton("Adv Settings")
         side_menu_layout.addRow(self.transfer_chapter_s_button, advanced_settings_button)
 
+        self.convert_to_lossless_checkbox = QCheckBox("Lossless format (avoids pipeline artifacts)")
+        side_menu_layout.addRow(self.convert_to_lossless_checkbox)
+
+        image_processing_pipeline_button = QPushButton("Run Image processing pipeline")
+        side_menu_layout.addRow(image_processing_pipeline_button)
+
         # Timer to regularly check for resizing needs
         timer = QTimer(self)
         timer.start(500)
@@ -556,6 +567,8 @@ class MainWindow(QMainWindow):
         next_chapter_button_side_menu.clicked.connect(self.next_chapter)
         advanced_settings_button.clicked.connect(self.advanced_settings)  # Menu
         self.transfer_chapter_s_button.clicked.connect(self.transfer_chapter_s)  # Menu
+        image_processing_pipeline_button.clicked.connect(self.run_pipeline)
+        self.convert_to_lossless_checkbox.checkStateChanged.connect(self.convert_to_lossless_toggled)
         # Rest
         self.provider_combobox.currentIndexChanged.connect(self.change_provider)  # Menu
         self.saver_combobox.currentIndexChanged.connect(self.change_saver)  # Menu
@@ -569,13 +582,16 @@ class MainWindow(QMainWindow):
         # Style GUI components
         self.centralWidget().setStyleSheet("background: transparent;")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.menu_button.setIcon(QIcon(f"{self.data_folder}/menu_icon.png"))
+        self.menu_button.setIcon(QIcon(f"{self.data_folder}/assets/menu_icon.png"))
         if self.theme == "light":
-            self.reload_chapter_button.setIcon(QIcon(f"{self.data_folder}/reload_chapter_icon_dark.png"))
-            self.reload_content_button.setIcon(QIcon(f"{self.data_folder}/reload_icon_dark.png"))
+            self.reload_chapter_button.setIcon(QIcon(f"{self.data_folder}/assets/reload_chapter_icon_dark.png"))
+            self.reload_content_button.setIcon(QIcon(f"{self.data_folder}/assets/reload_icon_dark.png"))
         else:
-            self.reload_chapter_button.setIcon(QIcon(f"{self.data_folder}/reload_chapter_icon_light.png"))
-            self.reload_content_button.setIcon(QIcon(f"{self.data_folder}/reload_icon_light.png"))
+            self.reload_chapter_button.setIcon(QIcon(f"{self.data_folder}/assets/reload_chapter_icon_light.png"))
+            self.reload_content_button.setIcon(QIcon(f"{self.data_folder}/assets/reload_icon_light.png"))
+
+    def convert_to_lossless_toggled(self) -> None:
+        self.settings.set_convert_to_lossless(self.convert_to_lossless_checkbox.isChecked())
 
     def handle_search_all(self, text: str) -> None:
         provider_name, rest = text.split(": ", maxsplit=1)
@@ -603,7 +619,7 @@ class MainWindow(QMainWindow):
                 return []
             return ret
         for provider_name, provider_cls in self.known_working_searchers:
-            provider = provider_cls("", 0, "", self.data_folder)
+            provider = provider_cls("", 0, "", f"{self.data_folder}/logos")
             duped_provider_search_funcs.append(_create_lambda(provider_name, provider.get_search_results, "1", (0, 2)))
             providers.append(provider)
 
@@ -645,6 +661,30 @@ class MainWindow(QMainWindow):
     def toggle_save_last_titles_checkbox(self):
         self.settings.set_save_last_titles(self.save_last_titles_checkbox.isChecked())
 
+    def update_scene_renderer(self, opengl_enabled: bool) -> None:
+        view = self.scrollarea.graphics_view
+        if opengl_enabled:
+            print("Switching to OpenGL Widget")
+            fmt = QSurfaceFormat()
+            fmt.setRenderableType(QSurfaceFormat.RenderableType.OpenGL)
+            QSurfaceFormat.setDefaultFormat(fmt)
+
+            gl_widget = QOpenGLWidget()
+            view.setViewport(gl_widget)
+        else:
+            print("Switching to default Widget")
+            view.setViewport(QWidget())
+
+        # Required: re-layout the view
+        # view.setRenderHints(
+        #     QPainter.RenderHint.SmoothPixmapTransform |
+        #     QPainter.RenderHint.Antialiasing
+        # )
+        QPixmapCache.clear()
+        view.viewport().update()
+        view.scene().invalidate()  # Forces full redraw
+        view.scene().update()
+
     def advanced_settings(self, *_, blocking: bool = True):
         settings = self.settings.get_advanced_settings()
         default_settings = json.loads(self.settings.get_default_setting("advanced_settings"))
@@ -670,16 +710,19 @@ class MainWindow(QMainWindow):
                     or settings["themes"]["dark"] != dialog.selected_settings["themes"]["dark"]):
                 self.save_settings()
                 self.set_theme()
-                # result = QMessageBox.question(self, "Restart Client?",
-                #                               "You must restart the client for the theme changes to take effect.\nDo you wish to continue?",
-                #                               QMessageBox.StandardButtons(QMessageBox.Yes | QMessageBox.No),
-                #                               QMessageBox.Yes)
-                # if result == QMessageBox.Yes:
-                #     print("Exiting ...")
-                #     self.save_settings()
-                #     sys.stdout.close()
-                #     self.settings.close()
-                #     QApplication.exit(1000)
+            if settings["misc"]["use_opengl_scene_renderer"] != dialog.selected_settings["misc"]["use_opengl_scene_renderer"]:
+                if dialog.selected_settings["misc"]["use_opengl_scene_renderer"] == False:
+                    result = QMessageBox.question(self, "Restart Client?",
+                                                  "When switching back from the OpenGL Scene-Renderer, you'll need to restart the program for it to take effect.\nDo you wish to continue?",
+                                                  QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                                  QMessageBox.StandardButton.Yes)
+                    if result == QMessageBox.StandardButton.Yes:
+                        print("Exiting ...")
+                        self.save_settings()
+                        # sys.stdout.close()
+                        # self.settings.close()
+                        QApplication.exit(1000)
+                self.update_scene_renderer(dialog.selected_settings["misc"]["use_opengl_scene_renderer"])
 
     @staticmethod
     def fetch_all_data_as_json(db_file, return_dict: bool = False):
@@ -802,7 +845,7 @@ class MainWindow(QMainWindow):
 
     def switch_provider(self, id: str):
         global playwright_instance
-        provider_cls: CoreProvider | None = None
+        provider_cls: _ty.Type[CoreProvider] | None = None
         for prov_cls in self.provider_list:
             if id == prov_cls.register_provider_id:
                 provider_cls = prov_cls
@@ -817,7 +860,7 @@ class MainWindow(QMainWindow):
             current_library = self.settings.get_libraries()[self.settings.get_current_lib_idx()]
         else:
             current_library = ""
-        self.provider = provider_cls(self.settings.get_title(), self.settings.get_chapter(), current_library, self.data_folder)
+        self.provider = provider_cls(self.settings.get_title(), self.settings.get_chapter(), current_library, f"{self.data_folder}/logos")
 
         if self.provider.get_search_results(None):
             self.search_widget.set_search_results_func(self.provider.get_search_results)
@@ -1122,7 +1165,9 @@ class MainWindow(QMainWindow):
 
             for recent_title in sett["recent_titles"]:
                 provider, title, chapter, *_ = recent_title.split("\x00") + ["", ""]
-                if title.lower() == last_title and (provider == last_provider or chapter == last_chapter):
+                if title.lower() == last_title and (provider == last_provider or chapter == last_chapter):  # Was just not working
+                    print(title, last_title, provider, last_provider, chapter, last_chapter)
+                    print("Removing")
                     continue
                 elif not _:
                     new_titles.append(f"{title}\x00{provider}\x00{0}")  # As the title is the first split
@@ -1271,7 +1316,7 @@ class MainWindow(QMainWindow):
 
     # Rest
     def reload_providers(self) -> None:
-        provider_manager: AutoProviderManager = AutoProviderManager(self.extensions_folder, CoreProvider)
+        provider_manager: AutoProviderManager = AutoProviderManager(self.library_extensions_folder, CoreProvider)
         loaded_provs = provider_manager.get_providers()
         self.provider_list.clear()
         self.saver_list.clear()
@@ -1290,7 +1335,7 @@ class MainWindow(QMainWindow):
         prov_i = 0
         saver_i = 0
         for provider_cls in loaded_provs:
-            provider = provider_cls("", 0, "", self.data_folder)
+            provider = provider_cls("", 0, "", f"{self.data_folder}/logos")
 
             if not provider.can_work():
                 continue
@@ -1363,7 +1408,7 @@ class MainWindow(QMainWindow):
     def reload_searchers(self) -> None:
         for provider_cls in self.provider_list:
             provider_name = provider_cls.register_provider_name
-            provider = provider_cls("", 0, "", self.data_folder)
+            provider = provider_cls("", 0, "", f"{self.data_folder}/logos")
             if not provider.get_search_results(None) or not provider.can_work() or not provider.is_working():
                 continue
             self.known_working_searchers.append((provider_name, provider_cls))
@@ -1409,6 +1454,8 @@ class MainWindow(QMainWindow):
 
     def reload_gui(self, reload_geometry: bool = False, reload_position: bool = False):
         # self.provider_combobox.setCurrentText(self.settings.get_provider())
+        self.pipeline_effects_loader = PipelineEffectLoader()
+        self.pipeline_effects_loader.load_from_folder(self.pipeline_extensions_folder)
         self.show_provider_logo_checkbox.setChecked(self.settings.get_show_provider_logo())
         self.gui_changing = True
         self.title_selector.setText(self.format_title(self.settings.get_title()))
@@ -1459,6 +1506,7 @@ class MainWindow(QMainWindow):
         self.scrollarea.horizontalScrollBar().setValue(horizontal_scrollbar_position)
         self.scroll_sensitivity_scroll_bar.setValue(self.settings.get_scrolling_sensitivity() * 10)
         self.save_last_titles_checkbox.setChecked(self.settings.get_save_last_titles())
+        self.convert_to_lossless_checkbox.setChecked(self.settings.get_convert_to_lossless())
 
     def reload(self):
         current_ts = time.time()
@@ -1549,6 +1597,36 @@ class MainWindow(QMainWindow):
         self.task_successful = progress_dialog.task_successful
         self.threading = False
 
+    def _resolve_pipeline_execution(self) -> list[tuple[PipelineEffectModule, dict[str, _ty.Any]]]:
+        resolved_pipeline = []
+        mode = self.settings.get_advanced_settings()["misc"].get("pipeline_mode", "sequential")
+
+        incompatible_effects = []
+
+        for step in self.settings.get_advanced_settings()["misc"]["image_processing_pipeline"]:
+            print(step)
+            effect_id = step.get("id")
+            settings = step.get("settings", {})
+
+            module = self.pipeline_effects_loader.verified_modules.get(effect_id)
+            if not module:
+                incompatible_effects.append(str(effect_id))
+                continue
+
+            if mode == "opengl" and not module.gpu_supported:
+                incompatible_effects.append(module.effect_name)
+                continue
+            if mode in {"parallel", "sequential"} and not module.cpu_supported:
+                incompatible_effects.append(module.effect_name)
+                continue
+
+            resolved_pipeline.append((module, settings))
+
+        if incompatible_effects:
+            print("Incompat", incompatible_effects)
+            self.button_popup("Incompatible Effects", "Some effects do not support this pipeline mode and were skipped.", "\n".join(incompatible_effects), "Warning")
+        return resolved_pipeline
+
     @staticmethod
     def _resize_to_pixel_count(img: np.ndarray, target_density_per_mpx: int = 1_000_000) -> np.ndarray:
         h, w = img.shape[:2]
@@ -1585,6 +1663,16 @@ class MainWindow(QMainWindow):
                     return np.concatenate((inverted, alpha), axis=2)
                 else:
                     return cv2.bitwise_not(img)
+            case "posterize":
+                levels = 4  # Change for stronger or subtler effect, but not too many
+                factor = 256 // levels
+                return ((img // factor) * factor).astype(np.uint8)
+            case "color_quantize":
+                levels = 10  # Change for stronger or subtler effect, but not too many
+                factor = 256 // levels
+                return ((img // factor) * factor).astype(np.uint8)
+
+
             case "clahe_lab":
                 if len(img.shape) == 2 or img.shape[2] != 3:
                     img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
@@ -1643,14 +1731,7 @@ class MainWindow(QMainWindow):
                 # Combine with edges
                 edges_colored = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
                 return cv2.bitwise_and(quantized, edges_colored)
-            case "posterize":
-                levels = 4  # Change for stronger or subtler effect, but not too many
-                factor = 256 // levels
-                return ((img // factor) * factor).astype(np.uint8)
-            case "color_quantize":
-                levels = 10  # Change for stronger or subtler effect, but not too many
-                factor = 256 // levels
-                return ((img // factor) * factor).astype(np.uint8)
+
             case "light_rays":
                 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
                 bright = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)[1]
@@ -1926,11 +2007,11 @@ class MainWindow(QMainWindow):
             case _:
                 raise ValueError(f"Unknown transform: {transform_id}")
 
-    def _process_single_image(self, filename: str, input_folder: str, cache_folder: str, processing_pipeline: list[str]) -> None:
+    def _process_single_image(self, filename: str, input_folder: str, cache_folder: str,
+                              pipeline_modules: list[tuple[PipelineEffectModule, dict[str, _ty.Any]]]) -> None:
         try:
             ext = PLPath(filename).suffix.lower()
             filepath = os.path.join(input_folder, filename)
-            # Use imageio for non-OpenCV-friendly formats
             if ext in {".heic", ".heif", ".gif"}:
                 img = iio.imread(filepath)
                 img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
@@ -1939,14 +2020,24 @@ class MainWindow(QMainWindow):
             if img is None:
                 print(f"[Warning] Could not load: {filename}")
                 return
-            for transform_id in processing_pipeline:
-                img = self.apply_transform(img, transform_id)
+
+            for module, settings in pipeline_modules:
+                preprocessing_funcs = module.get_preprocessing_funcs()
+                settings = {
+                    k: preprocessing_funcs[k](v) for k, v in settings.items()
+                }
+                if module.cpu_function:
+                    img = module.cpu_function(img, **settings)
+                else:
+                    print(f"[Warning] Effect {module.effect_id} has no CPU fallback.")
+
             out_path = os.path.join(cache_folder, filename)
             cv2.imwrite(out_path, img)
         except Exception as e:
             print(f"[Error] Processing {filename}: {e}")
+            print(format_exc())
 
-    def process_images(self, cache_folder: str, processing_pipeline: list[str]) -> None:
+    def process_images(self, cache_folder: str, _: list = None) -> None:
         os.makedirs(cache_folder, exist_ok=True)
         input_folder = cache_folder
 
@@ -1954,47 +2045,63 @@ class MainWindow(QMainWindow):
             f for f in os.listdir(input_folder)
             if PLPath(f).suffix.lower() in (".png", ".webp", ".jpg", ".jpeg", ".gif", ".heif", ".heic", ".bmp")
         ]
-        total = len(image_files)
-        if total == 0 or len(processing_pipeline) == 0:
+        if not image_files:
+            return
+
+        # Determine pipeline mode and resolve usable modules
+        mode = self.settings.get_advanced_settings()["misc"].get("pipeline_mode", "sequential")
+        pipeline_modules = self._resolve_pipeline_execution()
+        if not pipeline_modules:
             return
 
         def process_all_images(progress_signal=None):
+            start = TimidTimer()
+            total = len(image_files)
             try:
-                if (getattr(self, "provider", None) and getattr(self.provider, "_shared_request_pool", None)
-                        and self.settings.get_advanced_settings().get("misc", {}).get("use_threading_for_pipeline_if_available", True)):
-                    # Parallel processing
+                if mode == "parallel" and getattr(self, "provider", None) and getattr(self.provider,
+                                                                                      "_shared_request_pool", None):
                     futures = [
                         self.provider._shared_request_pool.pool.submit(
                             self._process_single_image,
                             filename,
                             input_folder,
                             cache_folder,
-                            processing_pipeline
+                            pipeline_modules
                         )
                         for filename in image_files
                     ]
                     for i, future in enumerate(futures):
-                        future.result()  # Await each job
+                        future.result()
                         if progress_signal:
                             progress_signal.emit(100 * ((i + 1) / total))
-                        yield  # Let dialog update
-                else:
-                    # Fallback: sequential processing
+                        yield
+                elif mode == "opengl":
+                    yield from run_opengl_pipeline_batch(
+                        # self=self,
+                        image_files=image_files,
+                        input_folder=input_folder,
+                        cache_folder=cache_folder,
+                        pipeline=pipeline_modules,
+                        progress_signal=progress_signal
+                    )
+                else:  # sequential
                     for i, filename in enumerate(image_files):
                         self._process_single_image(
                             filename,
                             input_folder,
                             cache_folder,
-                            processing_pipeline
+                            pipeline_modules
                         )
                         if progress_signal:
                             progress_signal.emit(100 * ((i + 1) / total))
-                        yield  # Let dialog update
+                        yield
             except Exception as e:
+                print(f"[Error] Pipeline failed: {e}")
+                print(start.end())
                 return False
+            print(start.end())
             return True
 
-        # Run the job with a progress dialog
         progress_dialog = CustomProgressDialog(
             self,
             window_title="Processing Images...",
@@ -2003,12 +2110,21 @@ class MainWindow(QMainWindow):
             args=(),
             kwargs={}
         )
-
         progress_dialog.exec()
-        self.task_successful = progress_dialog.task_successful
+        if not progress_dialog.task_successful:
+            QMessageBox.information(self, "Info", "The processing of the chapter has failed.",
+                                    QMessageBox.StandardButton.Ok,
+                                    QMessageBox.StandardButton.Ok)
+
+    def run_pipeline(self) -> None:
+        scroll_positions = (self.scrollarea.horizontalScrollBar().value(), self.scrollarea.verticalScrollBar().value())
+        self.process_images(self.cache_manager.get_cache_folder(self.provider.get_chapter()))
+        self.reload_content()
+        self.scrollarea.horizontalScrollBar().setValue(scroll_positions[0])
+        self.scrollarea.verticalScrollBar().setValue(scroll_positions[1])
 
     def chapter_loading_wrapper(self, func, cache_folder, fail_info, fail_text):
-        self.threading_wrapper(True, True, func, args=(cache_folder,))
+        self.threading_wrapper(True, True, func, args=(cache_folder, self.settings.get_convert_to_lossless()))
 
         if self.task_successful:
             self.reload_window_title()
@@ -2202,11 +2318,11 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "window_layout"):
             if icon_theme_color == "light":
-                self.reload_chapter_button.setIcon(QIcon(f"{self.data_folder}/reload_chapter_icon_dark.png"))
-                self.reload_content_button.setIcon(QIcon(f"{self.data_folder}/reload_icon_dark.png"))
+                self.reload_chapter_button.setIcon(QIcon(f"{self.data_folder}/assets/reload_chapter_icon_dark.png"))
+                self.reload_content_button.setIcon(QIcon(f"{self.data_folder}/assets/reload_icon_dark.png"))
             else:
-                self.reload_chapter_button.setIcon(QIcon(f"{self.data_folder}/reload_chapter_icon_light.png"))
-                self.reload_content_button.setIcon(QIcon(f"{self.data_folder}/reload_icon_light.png"))
+                self.reload_chapter_button.setIcon(QIcon(f"{self.data_folder}/assets/reload_chapter_icon_light.png"))
+                self.reload_content_button.setIcon(QIcon(f"{self.data_folder}/assets/reload_icon_light.png"))
         self.theme = icon_theme_color
         self.scrollarea.graphics_view.resetCachedContent()
 

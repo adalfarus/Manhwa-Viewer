@@ -7,10 +7,9 @@ from datetime import datetime
 
 import cv2
 import numpy as np
-from PIL import Image
 from PySide6.QtCore import Signal
 
-from core.modules.LibraryPlugin import CoreProvider, LibraryProvider, ProviderImage, CoreSaver, LibrarySaver
+from modules.LibraryPlugin import CoreProvider, LibraryProvider, ProviderImage, CoreSaver, LibrarySaver
 import typing as _ty
 
 import ffmpeg
@@ -82,55 +81,26 @@ class DeepCSaver(LibrarySaver):
         "size":            {"fps": 60,  "crf": 28, "preset": "medium",   "tune": "animation"},
         "smallest_size":   {"fps": 120, "crf": 35, "preset": "fast",     "tune": "grain"},
     }
-    quality_settings = {
+    quality_settingsold = {
         "best_quality": {"fps": 1, "crf": 16, "preset": "veryslow", "tune": "psnr"},
         "quality": {"fps": 30, "crf": 23, "preset": "slow", "tune": "psnr"},
         "size": {"fps": 60, "crf": 28, "preset": "veryslow", "tune": "psnr"},
         "smallest_size": {"fps": 120, "crf": 35, "preset": "veryslow", "tune": "psnr"},
     }
-
-    old_if = """        if len(sizes) > 1:
-            # Combine vertically
-            max_width = max(w for w, h in sizes)
-            total_height = sum(img.height for img in images)
-            combined = Image.new("RGB", (max_width, total_height))
-            y_offset = 0
-            for img in images:
-                if img.width != max_width:
-                    img = img.crop((0, 0, max_width, img.height))  # Crop excess width
-                combined.paste(img, (0, y_offset))
-                y_offset += img.height
-
-            # Ideal portrait aspect ratio
-            target_ratio = 9 / 16
-            best_chunk_height = None
-            smallest_diff = float("inf")
-
-            for n_slices in range(1, total_height + 1):
-                if total_height % n_slices != 0:
-                    continue  # Only allow clean splits
-                chunk_height = total_height // n_slices
-                aspect = max_width / chunk_height
-                diff = abs(aspect - target_ratio)
-                if diff < smallest_diff:
-                    smallest_diff = diff
-                    best_chunk_height = chunk_height
-                if diff < 0.01:
-                    break  # Close enough
-
-            num_chunks = total_height // best_chunk_height
-            resized_paths = []
-            for i in range(num_chunks):
-                top = i * best_chunk_height
-                bottom = top + best_chunk_height
-                box = (0, top, max_width, bottom)
-                out_path = os.path.join(chapter_folder, f"{i:03}.png")
-                combined.crop(box).save(out_path)
-                resized_paths.append(out_path)"""
+    quality_settings = {
+        "maximum_quality": {"fps": 1, "crf": 14, "preset": "veryslow", "tune": "psnr"},
+        "high_quality": {"fps": 10, "crf": 18, "preset": "slow", "tune": "psnr"},
+        "quality": {"fps": 30, "crf": 23, "preset": "slow", "tune": "psnr"},
+        "size": {"fps": 60, "crf": 28, "preset": "medium", "tune": "psnr"},
+        "smaller_size": {"fps": 90, "crf": 32, "preset": "medium", "tune": "psnr"},
+        "smallest_size": {"fps": 120, "crf": 38, "preset": "slow", "tune": "psnr"},
+        "fast_read": {"fps": 60, "crf": 28, "preset": "ultrafast", "tune": "fastdecode"},
+        "archival": {"fps": 1, "crf": 16, "preset": "veryslow", "tune": "psnr"},
+    }
 
     @classmethod
     def save_chapter(cls, provider: CoreProvider, chapter_number: str, chapter_title: str, chapter_img_folder: str,
-                     quality_present: _ty.Literal["best_quality", "quality", "size", "smallest_size"],
+                     quality_present: _ty.Literal["maximum_quality", "high_quality", "quality", "size", "smaller_size", "smallest_size", "fast_read", "archival"],
                      progress_signal: Signal | None = None) -> _ty.Generator[None, None, bool]:
         ret_val = super()._ensure_valid_chapter(provider, chapter_number, chapter_title, chapter_img_folder, quality_present)
         if not ret_val:
@@ -348,8 +318,8 @@ def extract_chapter_images(chapter_file: str, output_dir: str, fps: int) -> None
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    # Define the output image format (e.g., test_images/frame001.jpg)
-    output_pattern = os.path.join(output_dir, 'frame_%03d.png')
+    # Define the output image format (e.g., test_images/001.jpg)  frame
+    output_pattern = os.path.join(output_dir, '%03d.png')  # frame_
 
     try:
         # Extract frames from the video file

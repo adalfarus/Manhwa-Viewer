@@ -82,12 +82,12 @@ def _configure() -> dict[str, str]:
     base_app_dir = _os.path.join(_os.environ.get("LOCALAPPDATA", ""), PROGRAM_NAME_NORMALIZED)
     base_version_dir = _os.path.join(base_app_dir, f"{VERSION}{VERSION_ADD}")
 
-    if INDEV and _os.path.exists(base_app_dir):  # Remove everything to simulate a fresh install
+    if INDEV and _os.path.exists(base_version_dir):  # Remove everything to simulate a fresh install
         if not INDEV_KEEP_RUNTIME_FILES:
-            _shutil.rmtree(base_app_dir)
-            _os.mkdir(base_app_dir)
+            _shutil.rmtree(base_version_dir)
+            _os.mkdir(base_version_dir)
         else:  # Skip only .db or .log files
-            for root, dirs, files in _os.walk(base_app_dir, topdown=False):
+            for root, dirs, files in _os.walk(base_version_dir, topdown=False):
                 for file in files:
                     if not file.lower().endswith((".db", ".log", ".png", ".webp", ".jpg", ".jpeg", ".gif", ".heif", ".heic", ".bmp")):
                         _os.remove(_os.path.join(root, file))
@@ -98,16 +98,14 @@ def _configure() -> dict[str, str]:
 
     dirs_to_create = []
     dir_structure = (
-            ("data", ("logs",)),
-            ("caches", ()),
+            ("data", ("assets", "logos", "models", "logs", "caches")),
             (f"{VERSION}{VERSION_ADD}", (
-                ("models", ()),
                 ("core", ("libs", "modules")),
-                ("extensions", ())
+                ("extensions", ("library", "pipeline_effects", "styling"))
             ))
     )  # Use a stack to iteratively traverse the directory structure
     remove_from_src_dir = f"{VERSION}{VERSION_ADD}"
-    remove_for = (("core",), ("core", "libs"), ("core", "modules"), ("extensions",), ("models",))
+    remove_for = (("core",), ("core", "libs"), ("core", "modules"), ("extensions",))
     stack: list[tuple[str, tuple[str, ...] | tuple]] = [(base_app_dir, item) for item in dir_structure]
     while stack:
         base_path, (dir_name, subdirs) = stack.pop()

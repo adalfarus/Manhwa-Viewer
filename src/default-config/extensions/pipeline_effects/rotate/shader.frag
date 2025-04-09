@@ -42,30 +42,18 @@ vec3 hsv2rgb(vec3 c) {
 }
 
 void main() {
-    vec4 color = texture(texture1, vec2(vTex.x, 1.0 - vTex.y));
+    vec4 color = texture(texture1, vTex); // texture(texture1, vec2(vTex.x, 1.0 - vTex.y))
     vec3 result = color.rgb;
 
-    if (mode == 0) {
-        result = 1.0 - result;
+    if (mode == 0) {  // RGB channel rotate: G, B, R > R, G, B
+        result = vec3(color.b, color.r, color.g);
     }
-    else if (mode == 1) {
+    else if (mode == 1) {  // Hue invert
         vec3 hsv = rgb2hsv(result);
-        hsv.z = 1.0 - hsv.z;
+        hsv.x = mod(hsv.x + 0.5 * (1.0 / 180.0) * 90.0, 1.0);  // +90 cv2s degrees in GLSL units
         result = hsv2rgb(hsv);
-    }
-    else if (mode == 2) {
-        vec3 hsv = rgb2hsv(result);
-        hsv.y = 1.0 - hsv.y;
-        result = hsv2rgb(hsv);
-    }
-    else if (mode == 3) {
-        result.r = 1.0 - result.r;
-    }
-    else if (mode == 4) {
-        result.g = 1.0 - result.g;
-    }
-    else if (mode == 5) {
-        result.b = 1.0 - result.b;
+    } else {  // Unknown mode — GREEN output
+        result = vec3(0.0, 1.0, 0.0);
     }
 
     FragColor = vec4(result, color.a);

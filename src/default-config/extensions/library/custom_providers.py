@@ -1,5 +1,5 @@
 """TBA"""
-from core.modules.LibraryPlugin import OnlineProvider, ManhwaLikeProvider, ProviderImage, slugify  # Remove ManhwaLike
+from modules.LibraryPlugin import OnlineProvider, ManhwaLikeProvider, ProviderImage, slugify  # Remove ManhwaLike
 
 from urllib.parse import urlencode, urlunparse, quote_plus, urljoin
 from bs4 import BeautifulSoup

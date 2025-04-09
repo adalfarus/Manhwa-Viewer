@@ -108,7 +108,7 @@ def generate_theme_stylesheet(
             background: transparent;
         }}
         QComboBox::down-arrow {{
-            image: url(data/arrow-down.png);
+            image: url(data/assets/arrow-down.png);
         }}
         QComboBox QAbstractItemView {{
             border: 1px solid {border_color};
@@ -452,7 +452,7 @@ class Themes:
                 background: transparent;
             }
             QComboBox::down-arrow {
-                image: url(data/arrow-down.png);
+                image: url(data/assets/arrow-down.png);
             }
             QComboBox QAbstractItemView {
                 border: 1px solid #808080;
@@ -720,7 +720,7 @@ class Themes:
                 background: transparent;
             }
             QComboBox::down-arrow {
-                image: url(data/arrow-down.png);
+                image: url(data/assets/arrow-down.png);
             }
             QComboBox QAbstractItemView {
                 border: 1px solid #808080;
@@ -989,7 +989,7 @@ class Themes:
                 background: transparent;
             }}
             QComboBox::down-arrow {{
-                image: url(data/arrow-down.png);
+                image: url(data/assets/arrow-down.png);
             }}
             QComboBox QAbstractItemView {{
                 border: 1px solid {mid_color};

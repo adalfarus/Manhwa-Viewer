@@ -1,0 +1,127 @@
+extending adalfarus::thin_basic;
+Default/os/reuse_st
+
+/* Start of QSS */
+/* STYLING OF INDIVIDUAL BUTTONS, ... TO INCLUDE ICONS */
+QFrame#user_panel-info_menu, QFrame#user_panel-state_menu {
+    background-color: $background_secondary;
+    border: 1px solid $border_primary;
+}
+QLabel#user_panel-state_menu-title_label {
+    font: 14px 'Segoe UI';
+    color: $color_primary;
+}
+QLineEdit#user_panel-state_menu-name_input, QSlider#user_panel-state_menu-size_input, QTableWidget#user_panel-state_menu-transition_table {
+    background-color: transparent;
+    border: 1px solid $border_primary;
+    border-radius: 4px;
+    padding: 4px;
+    color: $color_primary;
+}
+QSlider#user_panel-state_menu-size_input::groove:horizontal {
+    background: $background_secondary;
+    height: 6px;
+    border-radius: 3px;
+}
+QSlider#user_panel-state_menu-size_input::handle:horizontal {
+    background: $background_primary;
+    width: 12px;
+    border-radius: 6px;
+}
+QTableWidget#user_panel-state_menu-transition_table {
+    border: 1px solid $border_primary;
+}
+QPushButton#user_panel-state_menu-close_button {
+    background-color: transparent;
+    color: #FF6600;
+    border: none;
+    font: bold 14px;
+}
+QPushButton#user_panel-state_menu-close_button:hover {
+    color: #FF8533;
+}
+QFrame#user_panel-control_menu {
+    background: $color_primary;
+    border: 1px solid $border_primary;
+    border-radius: 15px;
+    padding: 5px;
+}
+QComboBox#user_panel-control_menu-token_list_box {
+    width: 75px;
+    background-color: $background_secondary;
+    color: $color_primary;
+    font-size: 14px;
+    border: 1px solid $border_primary;
+    border-radius: 6px;
+    padding: 8px;
+}
+QComboBox#user_panel-control_menu-token_list_box:drop-down {
+    background-color: gray;
+}
+QPushButton#user_panel-control_menu-play_button, QPushButton#user_panel-control_menu-stop_button, QPushButton#user_panel-control_menu-next_button {
+    background: transparent;
+    border: none;
+    icon-size: 30px 30px;
+}
+QPushButton#user_panel-control_menu-play_button {
+    icon: $play_button;
+}
+QPushButton#user_panel-control_menu-stop_button {
+    icon: $stop_button;
+}
+QPushButton#user_panel-control_menu-next_button {
+    icon: $next_button;
+}
+QPushButton#menu_bar-QPushButton {
+    icon: $menu_icon;
+    icon-size: 10px 10px;
+}
+QPushButton#user_panel-info_menu_button {
+    icon: $info_icon;
+    icon-size: 20px 20px;
+}
+QAutomatonTokenIO {
+    background-color: $background_secondary;
+    border: 1px solid $border_primary;
+    border-radius: 6px;
+}
+QGraphicsView QScrollBar:vertical {
+    background: $background_tertiary;
+    width: 10px;
+}
+QGraphicsView QScrollBar:horizontal {
+    background: $background_tertiary;
+    height: 10px;
+}
+QGraphicsView QScrollBar::handle:vertical {
+    border-radius: 5px;
+    border: 1px solid $selection_background;
+}
+QGraphicsView QScrollBar::handle:horizontal {
+    border-radius: 5px;
+    border: 1px solid $selection_background;
+}
+PresetSlider {
+    background-color: $background_tertiary;
+    border-radius: 10px;
+    padding: 5px;
+}
+PresetSlider QPushButton#preset_button {
+    background-color: $background_tertiary;
+    color: $color_primary;
+    border: none;
+    padding: 5px;
+    border-radius: 5px;
+    font-size: 12px;
+}
+PresetSlider QPushButton:checked#preset_button {
+    background-color: $background_secondary;
+    border: 1px solid $border_primary;
+    color: $color_primary;
+    font-weight: bold;
+    border-radius: 5px;
+    box-shadow: 0px 0px 5px $background_secondary;
+}
+/* End of QSS */
+
+ph:

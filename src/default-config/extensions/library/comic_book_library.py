@@ -2,10 +2,10 @@ import json
 import tempfile
 from datetime import datetime
 
-from PIL import Image
+import cv2
 from PySide6.QtCore import Signal
 
-from core.modules.LibraryPlugin import CoreProvider, LibraryProvider, ProviderImage, CoreSaver, LibrarySaver
+from modules.LibraryPlugin import (CoreProvider, LibraryProvider, ProviderImage, CoreSaver, LibrarySaver)
 import typing as _ty
 
 import zipfile
@@ -60,7 +60,7 @@ class ComicBookSaver(LibrarySaver):
 
     @classmethod
     def save_chapter(cls, provider: "CoreProvider", chapter_number: str, chapter_title: str, chapter_img_folder: str,
-                     quality_present: _ty.Literal["best_quality", "quality", "size", "smallest_size"],
+                     quality_present: _ty.Literal["maximum_quality", "high_quality", "quality", "size", "smaller_size", "smallest_size", "fast_read", "archival"],
                      progress_signal: Signal | None = None) -> _ty.Generator[None, None, bool]:
         ret_val = super()._ensure_valid_chapter(provider, chapter_number, chapter_title, chapter_img_folder, quality_present)
         if not ret_val:
@@ -81,12 +81,17 @@ class ComicBookSaver(LibrarySaver):
             os.makedirs(pages_path, exist_ok=True)
 
             scale_map = {
-                "best_quality": 1.0,
-                "quality": 0.75,
-                "size": 0.5,
-                "smallest_size": 0.25
+                "maximum_quality": (1.0, [cv2.IMWRITE_PNG_COMPRESSION, 3]),  # Lossless, uncompressed PNG
+                "high_quality": (1.0, [cv2.IMWRITE_JPEG_QUALITY, 100]),  # JPEG max quality
+                "quality": (0.75, [cv2.IMWRITE_JPEG_QUALITY, 90]),  # Default good quality
+                "size": (0.5, [cv2.IMWRITE_JPEG_QUALITY, 80]),  # Balanced
+                "smaller_size": (0.4, [cv2.IMWRITE_JPEG_QUALITY, 70]),  # Smaller files
+                "smallest_size": (0.25, [cv2.IMWRITE_JPEG_QUALITY, 60]),  # Even smaller
+                "fast_read": (1.0, [cv2.IMWRITE_JPEG_QUALITY, 80]),  # Higher decode speed, lossy
+                "archival": (1.0, [cv2.IMWRITE_PNG_COMPRESSION, 6])  # Best PNG compression (slow)
             }
-            scale = scale_map.get(quality_present, 1.0)
+
+            scale, encoding_params = scale_map.get(quality_present, (1.0, [cv2.IMWRITE_JPEG_QUALITY, 90]))
 
             image_files = sorted([
                 f for f in os.listdir(chapter_img_folder)
@@ -99,14 +104,28 @@ class ComicBookSaver(LibrarySaver):
 
             for idx, img_file in enumerate(image_files):
                 src = os.path.join(chapter_img_folder, img_file)
-                dst = os.path.join(pages_path, img_file)
+                dst = os.path.join(pages_path, os.path.splitext(img_file)[0] + ".jpg")  # Use jpg/png depending on param
+
                 try:
-                    with Image.open(src) as img:
-                        if scale == 1.0:
-                            img.save(dst)
-                        else:
-                            resized = img.resize((int(img.width * scale), int(img.height * scale)), Image.Resampling.LANCZOS)
-                            resized.save(dst)
+                    img = cv2.imread(src, cv2.IMREAD_UNCHANGED)
+                    if img is None:
+                        raise ValueError("Could not load image")
+
+                    # Convert grayscale/alpha to BGR
+                    if len(img.shape) == 2:
+                        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                    elif img.shape[2] == 4:
+                        img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+
+                    if scale != 1.0:
+                        new_size = (int(img.shape[1] * scale), int(img.shape[0] * scale))
+                        img = cv2.resize(img, new_size,
+                                         interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
+
+                    is_png = encoding_params[0] == cv2.IMWRITE_PNG_COMPRESSION
+                    out_ext = ".png" if is_png else ".jpg"
+                    dst = os.path.splitext(dst)[0] + out_ext
+                    cv2.imwrite(dst, img, encoding_params)
                 except Exception as e:
                     print(f"Error resizing {img_file}: {e}")
 
@@ -281,9 +300,18 @@ class ComicBookLibraryProvider(LibraryProvider):
             total = len(image_files)
 
             for idx, src in enumerate(image_files, start=1):
-                dst = os.path.join(self._current_cache_folder, os.path.basename(src))
                 try:
-                    shutil.copy2(src, dst)
+                    filename = os.path.basename(src)
+                    if self._convert_to_lossless_format:
+                        name, _ = os.path.splitext(filename)
+                        img = cv2.imread(src, cv2.IMREAD_UNCHANGED)
+                        if img is None:
+                            print(f"[Warning] Could not load image: {src}")
+                            continue
+                        self.save_as_lossless(img, self._current_cache_folder, name)
+                    else:
+                        dst = os.path.join(self._current_cache_folder, filename)
+                        shutil.copy2(src, dst)
                 except Exception as e:
                     print(f"Failed to copy {src} → {dst}: {e}")
                     continue

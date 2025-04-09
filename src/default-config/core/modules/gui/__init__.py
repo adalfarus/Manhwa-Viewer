@@ -4,9 +4,9 @@ from PySide6.QtWidgets import (QListWidget, QDialog, QStyledItemDelegate, QCombo
                                QFontComboBox, QLabel, QLineEdit, QToolButton, QHBoxLayout, QRadioButton, QPushButton,
                                QCheckBox, QSpinBox, QDialogButtonBox, QListWidgetItem, QWidget, QFileDialog, QMenu,
                                QStyleOptionComboBox, QStyle, QDoubleSpinBox, QProgressBar, QSizePolicy, QMessageBox,
-                               QTextEdit, QLayout, QLayoutItem, QScrollArea, QFrame)
+                               QTextEdit, QLayout, QLayoutItem, QScrollArea, QFrame, QSlider, QColorDialog)
 from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QByteArray, Qt, QTimer, Signal, QPoint, QSize, QRect
-from PySide6.QtGui import QWheelEvent, QFont, QPaintEvent, QPainter, QFontMetrics
+from PySide6.QtGui import QWheelEvent, QFont, QPaintEvent, QPainter, QFontMetrics, QShowEvent
 
 from .tasks import CustomProgressDialog
 
@@ -14,6 +14,17 @@ import sqlite3
 import shutil
 import json
 import os
+
+from ..pipeline_plugin.gui import NoGui, ColorPicker, Combobox, Spinbox, Slider, Checkbox, Input, KeyboardInput, \
+    VectorInput, Widget
+
+# Standard typing imports for aps
+from abc import abstractmethod, ABCMeta
+import collections.abc as _a
+import typing as _ty
+import types as _ts
+
+from ..pipeline_plugin.loader import PipelineEffectModule
 
 
 class QFlowLayout(QLayout):  # Not by me
@@ -111,8 +122,17 @@ class QFlowLayout(QLayout):  # Not by me
         return y + lineHeight - rect.y()
 
 
+class PillFrame(QFrame):
+    doubleClickEvent = Signal()
+    def mouseDoubleClickEvent(self, event, /):
+        self.doubleClickEvent.emit()
+        super().mouseDoubleClickEvent(event)
+
+
 class QLabelSelector(QWidget):
-    pill_added_signal = Signal(list)  # Signal of all current pills
+    pill_added_signal = Signal(tuple)  # tuple idx label
+    pill_removed_signal = Signal(int)  # idx
+    pill_doubleclicked = Signal(int)  # idx
 
     def __init__(self, parent: QWidget | None = None, position_label_bar_at_top: bool = False) -> None:
         super().__init__(parent=parent)
@@ -149,6 +169,8 @@ class QLabelSelector(QWidget):
         if not position_label_bar_at_top:
             main_layout.addWidget(label_bar_scroll)
 
+        self._pills: list[PillFrame] = []
+
     def set_available_labels(self, labels: list[str]) -> None:
         self._available_labels = labels
         while self.label_bar.count():  # Clear current buttons
@@ -161,10 +183,13 @@ class QLabelSelector(QWidget):
             btn.clicked.connect(lambda _, n=name: self._add_pill(n))
             self.label_bar.addWidget(btn)
 
-    def _remove_pill(self, tag_frame: QFrame) -> None:
+    def _remove_pill(self, tag_frame: PillFrame) -> None:
         tag_frame.setParent(None)
         tag_frame.deleteLater()
-        self.pill_added_signal.emit(self.get_current_pills())
+        pill_idx: int = self._pills.index(tag_frame)
+        self._pills.pop(pill_idx)
+        self.pill_removed_signal.emit(pill_idx)
+        # self.pill_added_signal.emit(self.get_current_pills())
 
     def _add_pill(self, name: str) -> None:
         tag_label = QLabel(name)
@@ -173,29 +198,35 @@ class QLabelSelector(QWidget):
         tag_layout.setContentsMargins(3, 3, 3, 3)
         tag_layout.addWidget(tag_label)
         tag_layout.addWidget(tag_xbutton)
-        tag_frame = QFrame()
+        tag_frame = PillFrame()
         tag_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        tag_frame.setStyleSheet("background-color: #d0d0d0; border-radius: 6px;")
+        # tag_frame.setStyleSheet("background-color: #d0d0d0; border-radius: 6px;")
         tag_frame.setLayout(tag_layout)
         tag_frame.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.MinimumExpanding)
 
+        tag_frame.doubleClickEvent.connect(lambda: self.pill_doubleclicked.emit(self._pills.index(tag_frame)))
         tag_xbutton.clicked.connect(lambda: self._remove_pill(tag_frame))
         self.pill_layout.addWidget(tag_frame)
-        self.pill_added_signal.emit(self.get_current_pills())
+        idx = len(self._pills)
+        self._pills.append(tag_frame)
+        self.pill_added_signal.emit((idx, name))  # self.get_current_pills()
+
+    def change_pill_label(self, pill_idx: int, new_label: str) -> None:
+        maybe_label = self._pills[pill_idx].findChild(QLabel)
+        if maybe_label:
+            maybe_label.setText(new_label)
 
     def get_current_pills(self) -> list[str]:
+        raise NotImplementedError
         pills: list[str] = []
-        for i in range(self.pill_layout.count()):
-            item = self.pill_layout.itemAt(i)
-            widget = item.widget()
-            if widget:
-                label = widget.findChild(QLabel)
-                if label:
-                    pills.append(label.text())
+        for widget in self._pills:
+            label = widget.findChild(QLabel)
+            if label:
+                pills.append(label.text())
         return pills
 
     def set_current_pills(self, pills: list[str]) -> None:
-        valid_pills = [p for p in pills if p in self._available_labels]
+        valid_pills = pills  # [p for p in pills if p in self._available_labels]
         while self.pill_layout.count():  # Clear current
             item = self.pill_layout.takeAt(0)
             widget = item.widget()
@@ -249,17 +280,289 @@ class QSmoothScrollingList(QListWidget):
         event.accept()  # Mark the event as handled
 
 
+class SmartSlider(QSlider):
+    scaledValueChanged = Signal(object)
+
+    def __init__(self, widget_def, value):
+        super().__init__(Qt.Orientation.Horizontal)
+
+        self._step = widget_def.step
+        self._type = widget_def.type
+
+        if self._type == float:
+            # Calculate scaling factor to convert float range to int range
+            self._scale = 1 / self._step
+
+            self.setMinimum(int(widget_def.min * self._scale))
+            self.setMaximum(int(widget_def.max * self._scale))
+            self.setValue(int(value * self._scale))
+        else:
+            self._scale = 1
+            self.setMinimum(int(widget_def.min))
+            self.setMaximum(int(widget_def.max))
+            self.setValue(int(value))
+
+        self.setSingleStep(1)
+        self.setProperty("step_size", self._step)
+        self.setProperty("value_type", self._type)
+        self.valueChanged.connect(self._emit_scaled)
+
+    def _emit_scaled(self, _):
+        self.scaledValueChanged.emit(self.value())
+
+    def value(self):
+        raw = super().value()
+        return raw / self._scale if self._type == float else raw
+
+    def setValue(self, val):
+        if self._type == float:
+            super().setValue(int(val * self._scale))
+        else:
+            super().setValue(int(val))
+
+
+class SmartTextEdit(QTextEdit):
+    """
+    A smart text edit that automatically adjusts it's size
+    """
+
+    def __init__(self, max_height: int = 100, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.max_height: int = max_height
+        self.textChanged.connect(self._adjustHeight)
+
+    def _adjustHeight(self) -> None:
+        """
+        Adjusts the height of the text edit
+        """
+        doc_height: float = self.document().size().height()
+        if doc_height > self.max_height:
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            self.setFixedHeight(self.max_height)
+        else:
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.setFixedHeight(int(doc_height))
+
+    def showEvent(self, event: QShowEvent) -> None:
+        """
+        QTextEdit show event
+        """
+        super().showEvent(event)
+        self._adjustHeight()
+
+    def text(self) -> str:
+        """
+        Returns the plaintext of the text edit
+        """
+        return self.toPlainText()
+
+    def setText(self, text: str, /) -> None:
+        self.setPlainText(text)
+
+
+class QVectorInput(QWidget):
+    valueChanged = Signal(list)  # Emits [x, y, z, ...] when any changes
+
+    def __init__(self, dims=3, labels=True, type_=float, min_=None, max_=None, step=0.1, parent=None):
+        super().__init__(parent)
+        self.dims = dims
+        self.spinboxes = []
+        self.layout = QHBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+
+        axis_labels = ["X", "Y", "Z", "W"]
+        SpinBox = QDoubleSpinBox if type_ == float else QSpinBox
+
+        for i in range(dims):
+            if labels:
+                self.layout.addWidget(QLabel(axis_labels[i]))
+            sb = SpinBox()
+            if min_ is not None: sb.setMinimum(min_)
+            if max_ is not None: sb.setMaximum(max_)
+            sb.setSingleStep(step)
+            sb.valueChanged.connect(self.emit_value)
+            self.spinboxes.append(sb)
+            self.layout.addWidget(sb)
+
+    def emit_value(self):
+        self.valueChanged.emit([sb.value() for sb in self.spinboxes])
+
+    def set_value(self, values):
+        for i, val in enumerate(values):
+            self.spinboxes[i].setValue(val)
+
+    def get_value(self):
+        return [sb.value() for sb in self.spinboxes]
+
+
+class PipelineEffectSettingsDialog(QDialog):
+    def __init__(self, effect_module: PipelineEffectModule, current_settings: dict[str, _ty.Any], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(effect_module.effect_name + " Settings")
+        self.setModal(True)
+
+        self.inputs = effect_module.register_gui_inputs
+        self.widgets: dict[str, QWidget] = {}
+
+        layout = QVBoxLayout()
+        form_layout = QFormLayout()
+
+        for key, input_obj in self.inputs.items():
+            label = QLabel(input_obj.label)
+            widget = self._build_widget(input_obj, current_settings.get(key, input_obj.default), key, label, effect_module)
+            self.widgets[key] = widget
+            if isinstance(widget, QWidget):
+                if label.text() != "":
+                    form_layout.addRow(label, widget)
+                else:
+                    form_layout.addRow(widget)
+
+        effect_module.gui_update_function(self.widgets)
+        layout.addLayout(form_layout)
+        layout.addWidget(self._build_buttons())
+        self.setLayout(layout)
+
+    def _build_widget(self, input_obj: Input, value: _ty.Any, key: str, label: QLabel, module: PipelineEffectModule) -> QWidget | Widget | None:
+        widget_def = input_obj.widget
+        if isinstance(widget_def, Checkbox):
+            box: QCheckBox = QCheckBox(widget_def.label)
+            box.setChecked(bool(value))
+            box.checkStateChanged.connect(lambda _: module.gui_update_function(self.widgets))
+            return box
+        elif isinstance(widget_def, Slider):
+            slider = SmartSlider(widget_def, value)
+            slider.setValue(value)
+            slider.scaledValueChanged.connect(lambda val: label.setText(input_obj.label.format(n=val)))
+            slider.scaledValueChanged.emit(slider.value())
+            slider.scaledValueChanged.connect(lambda _: module.gui_update_function(self.widgets))
+            return slider
+        elif isinstance(widget_def, Spinbox):
+            spinbox: QSpinBox | QDoubleSpinBox
+            if widget_def.type == int:
+                spinbox = QSpinBox()
+                spinbox.setMinimum(int(widget_def.min))
+                spinbox.setMaximum(int(widget_def.max))
+                spinbox.setSingleStep(int(widget_def.step))
+                spinbox.setValue(int(value))
+                spinbox.valueChanged.connect(lambda _: module.gui_update_function(self.widgets))
+                return spinbox
+            else:
+                spinbox = QDoubleSpinBox()
+                spinbox.setMinimum(float(widget_def.min))
+                spinbox.setMaximum(float(widget_def.max))
+                spinbox.setSingleStep(float(widget_def.step))
+                spinbox.setValue(float(value))
+                spinbox.valueChanged.connect(lambda _: module.gui_update_function(self.widgets))
+                return spinbox
+        elif isinstance(widget_def, Combobox):
+            combo = QComboBox()
+            reverse = {v: k for k, v in widget_def.options.items()}
+            for name, val in widget_def.options.items():
+                combo.addItem(name, userData=val)
+            default_text = reverse.get(value, list(widget_def.options.keys())[0])
+            combo.setCurrentText(default_text)
+            combo.currentIndexChanged.connect(lambda _: module.gui_update_function(self.widgets))
+            return combo
+        elif isinstance(widget_def, ColorPicker):
+            btn = QPushButton("Pick Color")
+            btn.setProperty("color_value", value)
+            btn.setProperty("gui_update_func", module.gui_update_function)
+            btn.setStyleSheet(f"background-color: rgb({value[0] * 255}, {value[1] * 255}, {value[2] * 255});")
+            btn.clicked.connect(lambda: self._choose_color(btn, key))
+            return btn
+        elif isinstance(widget_def, NoGui):
+            widget_def.set_value(value)
+            return widget_def
+        elif isinstance(widget_def, KeyboardInput):
+            edit: SmartTextEdit | QLineEdit
+            widget_def: KeyboardInput
+            if widget_def.multiline:
+                edit = SmartTextEdit()
+            else:
+                edit = QLineEdit()
+            edit.setPlaceholderText(widget_def.placeholder)
+            edit.setText(value)
+            edit.textChanged.connect(lambda x: edit.setText(widget_def.validation_func(x)))
+            edit.textChanged.connect(lambda _: module.gui_update_function(self.widgets))
+            return edit
+        elif isinstance(widget_def, VectorInput):
+            widget = QVectorInput(
+                dims=widget_def.dims,
+                labels=widget_def.labels,
+                type_=widget_def.type,
+                min_=widget_def.min,
+                max_=widget_def.max,
+                step=widget_def.step,
+            )
+
+            if isinstance(value, (list, tuple)):
+                widget.set_value(value)
+
+            # Optional: connect valueChanged to update the label
+            def update_label(vec):
+                formatted = ", ".join(f"{v:.2f}" for v in vec)
+                label.setText(input_obj.label.format(n=formatted))
+
+            widget.valueChanged.connect(update_label)
+            update_label(widget.get_value())
+            widget.valueChanged.connect(lambda _: module.gui_update_function(self.widgets))
+            return widget
+        return None
+
+    def _choose_color(self, btn: QPushButton, key: str):
+        current_rgb = self.widgets[key].palette().button().color()
+        color = QColorDialog.getColor(current_rgb, self, "Choose Tint Color")
+
+        if color.isValid():
+            self.widgets[key].setStyleSheet(f"background-color: {color.name()};")
+            rgb = (color.redF(), color.greenF(), color.blueF())
+            self.widgets[key].setProperty("color_value", rgb)
+            self.widgets[key].property("gui_update_func")(self.widgets)
+
+    def _build_buttons(self) -> QDialogButtonBox:
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        return btns
+
+    def get_updated_settings(self) -> dict[str, _ty.Any]:
+        result = {}
+        for key, widget in self.widgets.items():
+            if isinstance(widget, QPushButton):
+                result[key] = widget.property("color_value") or (1.0, 0.0, 0.0)
+            elif isinstance(widget, QSlider):
+                # step = widget.property("step_size") or 1
+                # typ = widget.property("value_type") or int
+                result[key] = widget.value()
+            elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+                result[key] = widget.value()
+            elif isinstance(widget, QComboBox):
+                result[key] = widget.currentData()
+            elif isinstance(widget, (SmartTextEdit, QLineEdit)):
+                result[key] = widget.text()
+            elif isinstance(widget, QVectorInput):
+                result[key] = widget.get_value()
+            elif isinstance(widget, NoGui):
+                result[key] = widget.get_value()
+            elif isinstance(widget, QCheckBox):
+                result[key] = int(widget.isChecked())
+            else:
+                raise RuntimeError(f"Unknown widget type {widget}")
+        return result
+
+
 class AdvancedSettingsDialog(QDialog):
     def __init__(self, parent: QWidget | None = None, current_settings: dict | None = None, default_settings: dict | None = None,
                  master=None, available_themes=None, export_settings_func=None) -> None:
         super().__init__(parent, Qt.WindowType.WindowCloseButtonHint | Qt.WindowType.WindowTitleHint)
-
         if default_settings is None:
             self.default_settings = {"recent_titles": [],
                                      "themes": {"light": "light_light", "dark": "dark", "font": "Segoe UI"},
                                      "settings_file_path": "",
                                      "settings_file_mode": "overwrite",
-                                     "misc": {"auto_export": False, "quality_preset": "quality", "max_cached_chapters": -1, "image_processing_pipeline": []}}
+                                     "misc": {"auto_export": False, "quality_preset": "quality", "max_cached_chapters": -1,
+                                              "pipeline_mode": "parallel", "image_processing_pipeline": [],
+                                              "use_opengl_scene_renderer": False}}
         else:
             self.default_settings = default_settings
         if current_settings is None:
@@ -335,7 +638,7 @@ class AdvancedSettingsDialog(QDialog):
         # self.mainLayout.addWidget(self.fileHandlingGroupBox)
 
         # Auto-Export and Workers
-        self.miscSettingsGroupBox = QGroupBox("Chapter Management Settings", self)
+        self.miscSettingsGroupBox = QGroupBox("Chapter Settings", self)
         self.miscSettingsLayout = QFormLayout(self.miscSettingsGroupBox)
         self.autoExportCheckBox = QCheckBox("Enable Auto-Transfer", self.miscSettingsGroupBox)
         # self.autoExportCheckBox.setEnabled(False)
@@ -345,10 +648,14 @@ class AdvancedSettingsDialog(QDialog):
         # self.workersSpinBox.setEnabled(False)
         self.quality_combo = QComboBox(self.miscSettingsGroupBox)
         self.quality_combo.addItems([
-            "Best Quality",
+            "Maximum Quality",
+            "High Quality",
             "Quality",
             "Size",
-            "Smallest Size"
+            "Smaller Size",
+            "Smallest Size",
+            "Fast Read",            # Optimized for decoding speed (even if larger file)
+            "Archival",             # Long-term storage with full data integrity
         ])
         quality_layout = QHBoxLayout()
         quality_layout.setContentsMargins(0, 0, 0, 0)
@@ -372,91 +679,29 @@ class AdvancedSettingsDialog(QDialog):
         self.miscSettingsLayout.addRow(quality_frame, chapters_frame)
         self.miscSettingsLayout.addRow(self.autoExportCheckBox)
 
-        self.image_proc_label_to_id = {
-            # Color
-            "Color: Bloom / Glow": "bloom",
-            "Color: Light Rays": "light_rays",
-            "Color: Split Tone": "split_tone",
-            "Color: Saturation Boost": "saturation_boost",
-            "Color: CLAHE + LAB (Enhanced Lightness)": "clahe_lab",
-            "Color: Flatten (K-Means)": "kmeans_flatten",
-            "Color: Flatten (Fast)": "flatten_fast",
-            # Stylize
-            "Stylize: Toon Shader": "toon_shader",
-            "Stylize: Poster Edge": "poster_edge",
-            "Stylize: Posterize Colors": "posterize",
-            "Stylize: Kuwahara Filter": "kuwahara",
-            "Stylize: Color Quantize (Flat Colors)": "color_quantize",
-            "Stylize: Sepia Tone (Vintage)": "sepia",
-            # Lines
-            # "Lens Distortion": "lens_distortion",
-            "Stylize: Adaptive Line Overlay": "adaptive_line_overlay",
-            "Stylize: Line Overlay (Canny)": "canny_line_overlay",
-            "Stylize: Color Dodge Line Overlay": "canny_line_overlay",
-            # B/W
-            "B/W: Luma": "grayscale_luma",
-            "B/W: CLAHE (Local Contrast)": "clahe",
-            # "B/W: Luma + Contrast Boost": "luma_contrast",
-            "B/W: Average": "grayscale_average",
-            "B/W: Adaptive Threshold (Line Art)": "adaptive_threshold",
-            "B/W: Threshold (Fast)": "threshold_fast",
-            "B/W: Edge Detection (Canny)": "canny_edges",
-            "B/W: Color Dodge (Pencil Highlight)": "color_dodge",
-            # Fixes
-            "Fix: Increase Resolution (2x)": "increase_resolution",
-            "Fix: AI-upscaling (2x)": "increase_resolution_dl",
-            "Fix: Resize to 1MP": "resize_to_1mp",
-            "Fix: Resize to 2MP": "resize_to_2mp",
-            "Fix: Resize to 4MP": "resize_to_4mp",
-            "Fix: Resize to 8MP": "resize_to_8mp",
-            "Fix: Resize to 12MP": "resize_to_12mp",
-            "Fix: Resize to 16MP": "resize_to_16mp",
-            "Fix: Resize to 20MP": "resize_to_20mp",
-            "Fix: Resize to 24MP": "resize_to_24mp",
-            "Fix: Resize to 28MP": "resize_to_28mp",
-            "Fix: Resize to 32MP": "resize_to_32mp",
-            "Fix: Shrink 50%": "shrink_50",
-            "Fix: Shrink 25%": "shrink_25",
-            "Fix: Invert Colors": "invert",
-            "Fix: Sharpen": "sharpen",
-            "Fix: Bilateral Filter (Soft Denoise)": "bilateral_filter_soft",
-            "Fix: Bilateral Filter (Denoise)": "bilateral_filter",
-            "Fix: Bilateral Filter (Strong Denoise)": "bilateral_filter_strong",
-            "Fix: Soft Blur": "soft_blur",
-            "Fix: Pixel Cleanup (Low-Res Art)": "pixel_cleanup",
-            "Fix: De-Block (Compression Repair)": "deblock",
-            "Fix: Denoise (Grain Cleanup)": "denoise",
-            "Fix: Smart Smooth (Contour Blur)": "smart_smooth",
-            "Fix: Gamma Correction (Brighten)": "gamma_correct",
-
-            # "LAB (Perceptual Color)": "lab",
-            # "Contrast Boost": "contrast_boost",
-            # "HSV": "hsv",
-            # "YCrCb": "ycrcb",
-            # "HLS": "hls",
-            # "HSV (Boost Value)": "hsv_boost",
-            # "YCrCb (Contrast Boost)": "ycrcb_boost",
-            # "HLS (Tone Adjust)": "hls_adjust",
-            # "B/W: Max-Min (Desat)": "grayscale_maxmin",
-            # "B/W: Red": "grayscale_red",
-            # "B/W: Green": "grayscale_green",
-            # "B/W: Blue": "grayscale_blue",
-            "Unknown ID": "unknown_id"
-        }
-        self.image_proc_id_to_label = {v: k for k, v in self.image_proc_label_to_id.items()}
         self.image_processing_pipeline = QLabelSelector(self.miscSettingsGroupBox)
-        lst = list(self.image_proc_label_to_id.keys())
-        lst.remove("Unknown ID")
-        self.image_processing_pipeline.set_available_labels(lst)
         image_proc_layout = QVBoxLayout()
         image_proc_layout.setContentsMargins(0, 0, 0, 0)
         image_proc_layout.addWidget(QLabel("Image processing pipeline"))
         image_proc_layout.addWidget(self.image_processing_pipeline)
+        self.image_processing_pipeline.pill_added_signal.connect(self.add_pipeline_effect)
+        self.image_processing_pipeline.pill_removed_signal.connect(self.remove_pipeline_effect)
+        self.image_processing_pipeline.pill_doubleclicked.connect(self.show_pipeline_effect_gui)
 
         self.miscSettingsLayout.addRow(image_proc_layout)
 
-        self.use_threading_if_available = QCheckBox("Use threading for pipeline if available")
-        self.miscSettingsLayout.addRow(self.use_threading_if_available)
+        self.pipeline_modes_label_to_id = {
+            "Sequential (Avoids thrashing)": "sequential",
+            "Parallel (if possible)": "parallel",
+            "OpenGL Shaders": "opengl"
+        }
+        self.pipeline_modes_id_to_label = {v: k for k, v in self.pipeline_modes_label_to_id.items()}
+        self.pipeline_mode_combobox = QComboBox()
+        self.pipeline_mode_combobox.addItems(tuple(self.pipeline_modes_label_to_id.keys()))
+
+        self.miscSettingsLayout.addRow(self.pipeline_mode_combobox)
+        self.use_opengl_render = QCheckBox("Use OpenGL Scene-Renderer")
+        self.miscSettingsLayout.addRow(self.use_opengl_render)
 
         self.mainLayout.addWidget(self.miscSettingsGroupBox)
 
@@ -482,6 +727,78 @@ class AdvancedSettingsDialog(QDialog):
         self.defaultButton.clicked.connect(self.revert_to_default)
 
         QTimer.singleShot(10, self.fix_size)
+
+    def format_pill_label(self, settings: dict[str, _ty.Any], module) -> str:
+        to_format: str = module.effect_name_format
+        formats: dict[str, _ty.Any] = {}
+        for name, definition in module.register_gui_inputs.items():
+            widget_def = definition.widget
+            if isinstance(widget_def, Combobox):
+                reverse = {v: k for k, v in widget_def.options.items()}
+                value = reverse[settings.get(name, None)]
+            elif isinstance(widget_def, ColorPicker):
+                value = tuple(round(x, 2) for x in settings.get(name, None))
+            else:
+                value = settings.get(name, None)
+            formats[name] = value
+        return to_format.format(**formats)
+
+    def add_pipeline_effect(self, effect: tuple[int, str]) -> None:
+        effect_idx, effect_name = effect
+        effect_id = self.image_proc_label_to_id.get(effect_name, "unknown_id")
+        if effect_id == "unknown_id":
+            default_settings = {}
+        else:
+            module = self.verified_modules[effect_id]
+            default_settings = module.get_default_settings()
+            self.image_processing_pipeline.change_pill_label(effect_idx, self.format_pill_label(default_settings, module))
+        self.current_image_proc_pipeline.append(
+            {
+                "id": effect_id,
+                "settings": default_settings
+            }
+        )
+
+    def add_pipeline_effect_label(self, effect: tuple[int, str]) -> None:
+        effect_idx, effect_name = effect
+        effect_id = self.image_proc_label_to_id.get(effect_name, "unknown_id")
+        if effect_id != "unknown_id":
+            module = self.verified_modules[effect_id]
+            settings = self.current_image_proc_pipeline[effect_idx].get("settings")
+            self.image_processing_pipeline.change_pill_label(effect_idx, self.format_pill_label(settings, module))
+
+    def remove_pipeline_effect(self, idx: int) -> None:
+        self.current_image_proc_pipeline.pop(idx)
+
+    def show_pipeline_effect_gui(self, pipeline_effect_idx: int) -> None:
+        pipeline_effect = self.current_image_proc_pipeline[pipeline_effect_idx]
+        pipeline_effect_settings = pipeline_effect.get("settings", {})
+        # effect_id = pipeline_effect["effect_id"]
+        pipeline_effect_module = self.verified_modules.get(pipeline_effect.get("id"), None)
+        if pipeline_effect_module is None:
+            pipeline_effect_module = PipelineEffectModule("unknown_id",
+            type("unknown_id", (), {  # type: ignore
+                "effect_name": "Unknown ID",
+                "effect_name_format": "Unknown ID",
+                "effect_id": "unknown_id",
+                "supports_cpu": False,
+                "supports_opengl": False,
+                "register_gui_inputs": {},
+                "vertex_shader_src": "",
+                "fragment_shader_src": "",
+                "update_gui": lambda _: None,
+                "apply_transform_cpu": None
+            }), "")
+
+        dlg = PipelineEffectSettingsDialog(
+            effect_module=pipeline_effect_module,
+            current_settings=pipeline_effect_settings,
+            parent=self
+        )
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            updated = dlg.get_updated_settings()
+            pipeline_effect["settings"] = updated
+            self.image_processing_pipeline.change_pill_label(pipeline_effect_idx, self.format_pill_label(updated, pipeline_effect_module))
 
     def fix_size(self):
         self.setFixedSize(self.size())
@@ -516,8 +833,8 @@ class AdvancedSettingsDialog(QDialog):
             # "settings_file_path": self.fileLocationLineEdit.text(),
             # "settings_file_mode": "overwrite" if self.overwriteRadioButton.isChecked() else "modify" if self.modifyRadioButton.isChecked() else "create_new",
             "misc": {"auto_export": self.autoExportCheckBox.isChecked(), "quality_preset": self.quality_combo.currentText().lower().replace(" ", "_"),
-                     "max_cached_chapters": self.max_cached_chapters_spinbox.value(), "use_threading_for_pipeline_if_available": self.use_threading_if_available.isChecked(),
-                     "image_processing_pipeline": [self.image_proc_label_to_id.get(x, "unknown_id") for x in self.image_processing_pipeline.get_current_pills()]}})
+                     "max_cached_chapters": self.max_cached_chapters_spinbox.value(), "pipeline_mode": self.pipeline_modes_label_to_id[self.pipeline_mode_combobox.currentText()],
+                     "image_processing_pipeline": self.current_image_proc_pipeline.copy(), "use_opengl_scene_renderer": self.use_opengl_render.isChecked()}})
                      #"num_workers": self.workersSpinBox.value()}})
 
     def load_settings_file(self):
@@ -636,8 +953,95 @@ class AdvancedSettingsDialog(QDialog):
         self.autoExportCheckBox.setChecked(settings.get("misc").get("auto_export") is True)
         # self.workersSpinBox.setValue(settings.get("misc").get("num_workers"))
         self.quality_combo.setCurrentText(settings.get("misc").get("quality_preset").replace("_", " ").title())
-        self.image_processing_pipeline.set_current_pills([self.image_proc_id_to_label.get(x, "Unknown ID") for x in settings.get("misc").get("image_processing_pipeline")])
-        self.use_threading_if_available.setChecked(settings.get("misc").get("use_threading_for_pipeline_if_available"))
+
+
+        self.image_proc_label_to_id1 = {
+            # Color
+            "Color: Bloom / Glow": "bloom",
+            "Color: Light Rays": "light_rays",
+            "Color: Split Tone": "split_tone",
+            "Color: Saturation Boost": "saturation_boost",
+            "Color: CLAHE + LAB (Enhanced Lightness)": "clahe_lab",
+            "Color: Flatten (K-Means)": "kmeans_flatten",
+            "Color: Flatten (Fast)": "flatten_fast",
+            # Stylize
+            "Stylize: Toon Shader": "toon_shader",
+            "Stylize: Poster Edge": "poster_edge",
+            "Stylize: Posterize Colors": "posterize",
+            "Stylize: Kuwahara Filter": "kuwahara",
+            "Stylize: Color Quantize (Flat Colors)": "color_quantize",
+            "Stylize: Sepia Tone (Vintage)": "sepia",
+            # Lines
+            # "Lens Distortion": "lens_distortion",
+            "Stylize: Adaptive Line Overlay": "adaptive_line_overlay",
+            "Stylize: Line Overlay (Canny)": "canny_line_overlay",
+            "Stylize: Color Dodge Line Overlay": "canny_line_overlay",
+            # B/W
+            "B/W: Luma": "grayscale_luma",
+            "B/W: CLAHE (Local Contrast)": "clahe",
+            # "B/W: Luma + Contrast Boost": "luma_contrast",
+            "B/W: Average": "grayscale_average",
+            "B/W: Adaptive Threshold (Line Art)": "adaptive_threshold",
+            "B/W: Threshold (Fast)": "threshold_fast",
+            "B/W: Edge Detection (Canny)": "canny_edges",
+            "B/W: Color Dodge (Pencil Highlight)": "color_dodge",
+            # Fixes
+            "Fix: Increase Resolution (2x)": "increase_resolution",
+            "Fix: AI-upscaling (2x)": "increase_resolution_dl",
+            "Fix: Resize to 1MP": "resize_to_1mp",
+            "Fix: Resize to 2MP": "resize_to_2mp",
+            "Fix: Resize to 4MP": "resize_to_4mp",
+            "Fix: Resize to 8MP": "resize_to_8mp",
+            "Fix: Resize to 12MP": "resize_to_12mp",
+            "Fix: Resize to 16MP": "resize_to_16mp",
+            "Fix: Resize to 20MP": "resize_to_20mp",
+            "Fix: Resize to 24MP": "resize_to_24mp",
+            "Fix: Resize to 28MP": "resize_to_28mp",
+            "Fix: Resize to 32MP": "resize_to_32mp",
+            "Fix: Shrink 50%": "shrink_50",
+            "Fix: Shrink 25%": "shrink_25",
+            "Fix: Invert Colors": "invert",
+            "Fix: Sharpen": "sharpen",
+            "Fix: Bilateral Filter (Soft Denoise)": "bilateral_filter_soft",
+            "Fix: Bilateral Filter (Denoise)": "bilateral_filter",
+            "Fix: Bilateral Filter (Strong Denoise)": "bilateral_filter_strong",
+            "Fix: Soft Blur": "soft_blur",
+            "Fix: Pixel Cleanup (Low-Res Art)": "pixel_cleanup",
+            "Fix: De-Block (Compression Repair)": "deblock",
+            "Fix: Denoise (Grain Cleanup)": "denoise",
+            "Fix: Smart Smooth (Contour Blur)": "smart_smooth",
+            "Fix: Gamma Correction (Brighten)": "gamma_correct",
+
+            # "LAB (Perceptual Color)": "lab",
+            # "Contrast Boost": "contrast_boost",
+            # "HSV": "hsv",
+            # "YCrCb": "ycrcb",
+            # "HLS": "hls",
+            # "HSV (Boost Value)": "hsv_boost",
+            # "YCrCb (Contrast Boost)": "ycrcb_boost",
+            # "HLS (Tone Adjust)": "hls_adjust",
+            # "B/W: Max-Min (Desat)": "grayscale_maxmin",
+            # "B/W: Red": "grayscale_red",
+            # "B/W: Green": "grayscale_green",
+            # "B/W: Blue": "grayscale_blue",
+            "Unknown ID": "unknown_id"
+        }
+        self.verified_modules = self.master.pipeline_effects_loader.verified_modules
+        self.image_proc_label_to_id = {"Unknown ID": "unknown_id"}
+        self.image_proc_label_to_id.update(**{item.effect_name: item.effect_id for item in list(self.verified_modules.values())})
+        self.image_proc_id_to_label = {v: k for k, v in self.image_proc_label_to_id.items()}
+        lst = list(self.image_proc_label_to_id.keys())
+        lst.remove("Unknown ID")
+        self.image_processing_pipeline.set_available_labels(lst)
+        self.current_image_proc_pipeline = settings.get("misc").get("image_processing_pipeline")
+        self.image_processing_pipeline.pill_added_signal.disconnect(self.add_pipeline_effect)
+        self.image_processing_pipeline.pill_added_signal.connect(self.add_pipeline_effect_label)
+        self.image_processing_pipeline.set_current_pills([self.image_proc_id_to_label.get(x.get("id"), "Unknown ID") for x in self.current_image_proc_pipeline])
+        self.image_processing_pipeline.pill_added_signal.disconnect(self.add_pipeline_effect_label)
+        self.image_processing_pipeline.pill_added_signal.connect(self.add_pipeline_effect)
+
+        self.pipeline_mode_combobox.setCurrentText(self.pipeline_modes_id_to_label[settings.get("misc").get("pipeline_mode")])
+        self.use_opengl_render.setChecked(settings.get("misc").get("use_opengl_scene_renderer"))
         self.max_cached_chapters_spinbox.setValue(settings.get("misc").get("max_cached_chapters"))
 
     def revert_last_saved(self):
@@ -678,8 +1082,8 @@ class AdvancedSettingsDialog(QDialog):
             # "settings_file_path": self.fileLocationLineEdit.text(),
             # "settings_file_mode": "overwrite" if self.overwriteRadioButton.isChecked() else "modify" if self.modifyRadioButton.isChecked() else "create_new",
             "misc": {"auto_export": self.autoExportCheckBox.isChecked(), "quality_preset": self.quality_combo.currentText().lower().replace(" ", "_"),
-                     "max_cached_chapters": self.max_cached_chapters_spinbox.value(), "use_threading_for_pipeline_if_available": self.use_threading_if_available.isChecked(),
-                     "image_processing_pipeline": [self.image_proc_label_to_id.get(x, "unknown_id") for x in self.image_processing_pipeline.get_current_pills()]}}
+                     "max_cached_chapters": self.max_cached_chapters_spinbox.value(), "pipeline_mode": self.pipeline_modes_label_to_id[self.pipeline_mode_combobox.currentText()],
+                     "image_processing_pipeline": self.current_image_proc_pipeline.copy(), "use_opengl_scene_renderer": self.use_opengl_render.isChecked()}}
                      # "num_workers": self.workersSpinBox.value()}}
 
         super().accept()
@@ -869,10 +1273,14 @@ class TransferDialog(QDialog):
         quality_layout.addWidget(QLabel("Quality preset:"))
         self.quality_combo = QComboBox()
         self.quality_combo.addItems([
-            "Best Quality",
+            "Maximum Quality",
+            "High Quality",
             "Quality",
             "Size",
-            "Smallest Size"
+            "Smaller Size",
+            "Smallest Size",
+            "Fast Read",            # Optimized for decoding speed (even if larger file)
+            "Archival",             # Long-term storage with full data integrity
         ])
         quality_layout.addWidget(self.quality_combo)
         self.main_layout.addLayout(quality_layout)

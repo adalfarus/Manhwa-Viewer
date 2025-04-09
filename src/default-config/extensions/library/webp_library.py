@@ -3,10 +3,10 @@ import os
 import shutil
 from datetime import datetime
 
-from PIL import Image
+import cv2
 from PySide6.QtCore import Signal
 
-from core.modules.LibraryPlugin import CoreProvider, LibraryProvider, ProviderImage, CoreSaver, LibrarySaver
+from modules.LibraryPlugin import CoreProvider, LibraryProvider, ProviderImage, CoreSaver, LibrarySaver
 import typing as _ty
 
 
@@ -16,7 +16,7 @@ class WebPSaver(LibrarySaver):
 
     @classmethod
     def save_chapter(cls, provider: CoreProvider, chapter_number: str, chapter_title: str, chapter_img_folder: str,
-                     quality_present: _ty.Literal["best_quality", "quality", "size", "smallest_size"],
+                     quality_present: _ty.Literal["maximum_quality", "high_quality", "quality", "size", "smaller_size", "smallest_size", "fast_read", "archival"],
                      progress_signal: Signal | None = None) -> _ty.Generator[None, None, bool]:
         ret_val = super()._ensure_valid_chapter(provider, chapter_number, chapter_title, chapter_img_folder, quality_present)
         if not ret_val:
@@ -32,19 +32,18 @@ class WebPSaver(LibrarySaver):
 
         os.makedirs(chapter_folder, exist_ok=True)
 
-        # webp_quality_map = {
-        #     "best_quality": 95,  # Nearly lossless
-        #     "quality": 85,  # Great visual quality
-        #     "size": 70,  # Noticeable compression, still decent
-        #     "smallest_size": 50  # Aggressive compression
-        # }
-        webp_quality_map = {
-            "best_quality": 50,  # Nearly lossless
-            "quality": 30,  # Great visual quality
-            "size": 10,  # Noticeable compression, still decent
-            "smallest_size": 0  # Aggressive compression
+        # Combined scaling + quality map for WebP (OpenCV)
+        config_map = {
+            "maximum_quality": (1.0, 100),
+            "high_quality": (1.0, 95),
+            "quality": (0.75, 85),
+            "size": (0.5, 70),
+            "smaller_size": (0.4, 50),
+            "smallest_size": (0.25, 20),
+            "fast_read": (1.0, 80),
+            "archival": (1.0, 100)  # We keep high quality here, storage is key
         }
-        quality = webp_quality_map.get(quality_present, 85)
+        scale, quality = config_map.get(quality_present, (1.0, 85))
 
         image_files = [
             f for f in os.listdir(chapter_img_folder)
@@ -60,10 +59,18 @@ class WebPSaver(LibrarySaver):
             dst = os.path.join(chapter_folder, os.path.splitext(img_file)[0] + ".webp")
 
             try:
-                with Image.open(src) as img:
-                    if img.mode in ("P", "RGBA"):
-                        img = img.convert("RGB")
-                    img.save(dst, format="WEBP", quality=quality)
+                img = cv2.imread(src)
+                if img is None:
+                    raise ValueError("Failed to read image")
+
+                # Resize if needed
+                if scale != 1.0:
+                    new_size = (int(img.shape[1] * scale), int(img.shape[0] * scale))
+                    img = cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
+
+                # Write WebP
+                cv2.imwrite(dst, img, [cv2.IMWRITE_WEBP_QUALITY, quality])
+
             except Exception as e:
                 print(f"Failed to process image {img_file}: {e}")
 
@@ -177,9 +184,18 @@ class WebPLibraryProvider(LibraryProvider):
 
         # Copy images one-by-one and update progress (0-100)
         for idx, src in enumerate(image_files, start=1):
-            dst = os.path.join(self._current_cache_folder, os.path.basename(src))
             try:
-                shutil.copy2(src, dst)
+                filename = os.path.basename(src)
+                if self._convert_to_lossless_format:
+                    name, _ = os.path.splitext(filename)
+                    img = cv2.imread(src, cv2.IMREAD_UNCHANGED)
+                    if img is None:
+                        print(f"[Warning] Could not load image: {src}")
+                        continue
+                    self.save_as_lossless(img, self._current_cache_folder, name)
+                else:
+                    dst = os.path.join(self._current_cache_folder, filename)
+                    shutil.copy2(src, dst)
             except Exception as e:
                 print(f"Failed to copy {src} → {dst}: {e}")
                 continue

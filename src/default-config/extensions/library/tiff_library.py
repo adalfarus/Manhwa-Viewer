@@ -3,10 +3,13 @@ import os
 import shutil
 from datetime import datetime
 
-from PIL import Image
+import imageio
+import imageio.v3 as iio
+import cv2
+import numpy as np
 from PySide6.QtCore import Signal
 
-from core.modules.LibraryPlugin import CoreProvider, LibraryProvider, ProviderImage, CoreSaver, LibrarySaver
+from modules.LibraryPlugin import CoreProvider, LibraryProvider, ProviderImage, CoreSaver, LibrarySaver
 import typing as _ty
 
 
@@ -16,7 +19,7 @@ class TiffSaver(LibrarySaver):
 
     @classmethod
     def save_chapter(cls, provider: CoreProvider, chapter_number: str, chapter_title: str, chapter_img_folder: str,
-                     quality_present: _ty.Literal["best_quality", "quality", "size", "smallest_size"],
+                     quality_present: _ty.Literal["maximum_quality", "high_quality", "quality", "size", "smaller_size", "smallest_size", "fast_read", "archival"],
                      progress_signal: Signal | None = None) -> _ty.Generator[None, None, bool]:
         ret_val = super()._ensure_valid_chapter(provider, chapter_number, chapter_title, chapter_img_folder, quality_present)
         if not ret_val:
@@ -35,12 +38,16 @@ class TiffSaver(LibrarySaver):
             os.remove(tiff_path)
 
         compression_map = {
-            "best_quality": "none",          # uncompressed
-            "quality": "tiff_lzw",           # lossless but smaller
-            "size": "tiff_deflate",          # balanced
-            "smallest_size": "jpeg",         # lossy, small
+            "maximum_quality": "none",  # No compression, raw data. Fastest write, huge size.
+            "high_quality": "lzw",  # Lossless, older but solid and well-supported.
+            "quality": "adobe_deflate",  # Lossless, Adobe-style Deflate compression.
+            "size": "deflate",  # Balanced size and speed, standard Deflate.
+            "smaller_size": "zstd",  # Lossless, newer compression (requires Pillow ≥ 8.2).
+            "smallest_size": "jpeg",  # Lossy, smallest files, fast read. Not suitable for archival.
+            "fast_read": "packbits",  # Very fast decode, poor compression.
+            "archival": "lzma",  # Best lossless compression ratio. Slow but ideal for storage.
         }
-        compression = compression_map.get(quality_present, "tiff_deflate")
+        compression = compression_map.get(quality_present, "deflate")
 
         image_files = sorted([
             f for f in os.listdir(chapter_img_folder)
@@ -51,36 +58,85 @@ class TiffSaver(LibrarySaver):
             yield
             return False
 
-        frames = []
+        # Step 1: Load and convert images
+        raw_images: list[np.ndarray] = []
+        max_width = 0
+
         for idx, img_file in enumerate(image_files):
             src = os.path.join(chapter_img_folder, img_file)
             try:
-                with Image.open(src) as img:
-                    img = img.convert("RGB")
-                    frames.append(img.copy())
+                img = cv2.imread(src)
+                if img is None:
+                    raise ValueError("Failed to load image")
+                if len(img.shape) == 2:
+                    img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+                elif img.shape[2] == 4:
+                    img = cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
+                else:
+                    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+                raw_images.append(img)
+                max_width = max(max_width, img.shape[1])
             except Exception as e:
                 print(f"[TIFF] Failed to process image {img_file}: {e}")
                 continue
 
             if progress_signal:
-                progress_signal.emit(int((idx + 1) / total_images * 90))
+                progress_signal.emit(int((idx + 1) / total_images * 60))  # earlier phase = 60%
                 yield  # Yield control
 
-        if not frames:
+        if not raw_images:
             print("[TIFF] No images processed successfully for .tiff.")
             yield
             return False
 
+        # Step 2: Resize to max_width and stack vertically
+        resized_images = []
+        for i, img in enumerate(raw_images):
+            h, w = img.shape[:2]
+            scale = max_width / w
+            new_size = (max_width, int(h * scale))
+            resized_img = cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
+            resized_images.append(resized_img)
+
+            if progress_signal:
+                progress_signal.emit(int((i + 1) / total_images * 80))  # resizing = up to 80%
+                yield
+
+        full_stack = np.vstack(resized_images)
+        total_height = full_stack.shape[0]
+        page_height = total_height // total_images  # 4096
+        page_count = total_images  # (total_height + page_height - 1) // page_height
+
+        # Step 3: Slice into pages
+        pages = []
+        for i in range(page_count):
+            y_start = i * page_height
+            y_end = min((i + 1) * page_height, total_height)
+            page = full_stack[y_start:y_end, :, :]
+            if page.shape[0] < page_height:
+                pad = np.full((page_height - page.shape[0], max_width, 3), 255, dtype=np.uint8)
+                page = np.vstack((page, pad))
+            pages.append(page)
+
+            if progress_signal:
+                progress_signal.emit(80 + int((i + 1) / page_count * 10))  # slicing = 80–90%
+                yield
+
+        # Step 4: Save TIFF
         try:
-            save_kwargs = {
-                "save_all": True,
-                "append_images": frames[1:],
+            save_kwargs: dict[str, str | int] = {
                 "compression": compression
             }
-            if compression == "jpeg":
-                save_kwargs["quality"] = 80
-
-            frames[0].save(tiff_path, **save_kwargs)
+            # if compression == "jpeg":
+            #     save_kwargs["quality"] = 80
+            iio.imwrite(
+                tiff_path,
+                pages,
+                plugin="tifffile",
+                **save_kwargs
+            )
+            print(f"[TIFF] Saved multi-page TIFF to: {tiff_path}")
         except Exception as e:
             print(f"[TIFF] Failed to save TIFF: {e}")
             yield
@@ -176,17 +232,38 @@ class TiffLibraryProvider(LibraryProvider):
         os.makedirs(self._current_cache_folder, exist_ok=True)
 
         try:
-            with Image.open(tiff_path) as img:
-                total = getattr(img, "n_frames", 1)
+            frames = iio.imread(tiff_path)  # shape: (N, H, W, C) or (N, H, W)
 
-                for i in range(total):
-                    img.seek(i)
-                    page = img.convert("RGB")
-                    output_path = os.path.join(self._current_cache_folder, f"{i+1:03}.jpg")
-                    page.save(output_path, format="JPEG")
+            if frames.ndim == 3:  # grayscale stack
+                frames = np.expand_dims(frames, axis=-1)
 
-                    progress = int(((i + 1) / total) * 100)
-                    yield progress
+            total = len(frames)
+            for i, frame in enumerate(frames):
+                try:
+                    # Handle grayscale
+                    if frame.ndim == 2:
+                        img = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                    # Handle RGBA
+                    elif frame.shape[2] == 4:
+                        img = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+                    # Handle RGB (most likely)
+                    elif frame.shape[2] == 3:
+                        img = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                    else:
+                        raise ValueError(f"Unexpected number of channels in frame: {frame.shape}")
+
+                    filename = f"{i + 1:03}"
+                    if self._convert_to_lossless_format:
+                        self.save_as_lossless(img, self._current_cache_folder, filename)
+                    else:
+                        out_path = os.path.join(self._current_cache_folder, f"{filename}.jpg")
+                        cv2.imwrite(out_path, img)
+
+                except Exception as e:
+                    print(f"[TIFF] Failed to process frame {i}: {e}")
+                    continue
+
+                yield int(((i + 1) / total) * 100)
 
         except Exception as e:
             print(f"[TIFF] Failed to read or extract TIFF: {e}")

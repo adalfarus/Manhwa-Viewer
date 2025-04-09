@@ -3,10 +3,10 @@ import os
 import shutil
 from datetime import datetime
 
-from PIL import Image
+import cv2
 from PySide6.QtCore import Signal
 
-from core.modules.LibraryPlugin import CoreProvider, LibraryProvider, ProviderImage, CoreSaver, LibrarySaver
+from modules.LibraryPlugin import CoreProvider, LibraryProvider, ProviderImage, CoreSaver, LibrarySaver
 import typing as _ty
 
 
@@ -16,7 +16,7 @@ class StdSaver(LibrarySaver):
 
     @classmethod
     def save_chapter(cls, provider: CoreProvider, chapter_number: str, chapter_title: str, chapter_img_folder: str,
-                     quality_present: _ty.Literal["best_quality", "quality", "size", "smallest_size"],
+                     quality_present: _ty.Literal["maximum_quality", "high_quality", "quality", "size", "smaller_size", "smallest_size", "fast_read", "archival"],
                      progress_signal: Signal | None = None) -> _ty.Generator[None, None, bool]:
         ret_val = super()._ensure_valid_chapter(provider, chapter_number, chapter_title, chapter_img_folder, quality_present)
         if not ret_val:
@@ -32,14 +32,19 @@ class StdSaver(LibrarySaver):
 
         os.makedirs(chapter_folder, exist_ok=True)
 
-        # Determine resize scale
+        # Resize + save image settings
         scale_map = {
-            "best_quality": 1.0,
-            "quality": 0.75,
-            "size": 0.5,
-            "smallest_size": 0.25
+            "maximum_quality": (1.0, [cv2.IMWRITE_PNG_COMPRESSION, 3], ".png"),
+            "high_quality": (1.0, [cv2.IMWRITE_JPEG_QUALITY, 100], ".jpg"),
+            "quality": (0.75, [cv2.IMWRITE_JPEG_QUALITY, 90], ".jpg"),
+            "size": (0.5, [cv2.IMWRITE_JPEG_QUALITY, 80], ".jpg"),
+            "smaller_size": (0.4, [cv2.IMWRITE_JPEG_QUALITY, 70], ".jpg"),
+            "smallest_size": (0.25, [cv2.IMWRITE_JPEG_QUALITY, 60], ".jpg"),
+            "fast_read": (1.0, [cv2.IMWRITE_JPEG_QUALITY, 85], ".jpg"),
+            "archival": (1.0, [cv2.IMWRITE_PNG_COMPRESSION, 6], ".png"),
         }
-        scale = scale_map.get(quality_present, 1.0)
+
+        scale, encoding_params, ext = scale_map.get(quality_present, (1.0, [cv2.IMWRITE_JPEG_QUALITY, 90], ".jpg"))
 
         image_files = [
             f for f in os.listdir(chapter_img_folder)
@@ -53,20 +58,21 @@ class StdSaver(LibrarySaver):
         # Copy + resize images into the chapter folder
         for index, img_file in enumerate(image_files):
             src = os.path.join(chapter_img_folder, img_file)
-            dst = os.path.join(chapter_folder, img_file)
+            dst = os.path.join(chapter_folder, f"{index:03}{ext}")
 
             try:
-                with Image.open(src) as img:
-                    if scale == 1.0:
-                        img.save(dst)
-                    else:
-                        new_size = (int(img.width * scale), int(img.height * scale))
-                        resized = img.resize(new_size, Image.Resampling.LANCZOS)
-                        resized.save(dst)
+                img = cv2.imread(src)
+                if img is None:
+                    raise ValueError("Could not read image")
+
+                if scale != 1.0:
+                    new_size = (int(img.shape[1] * scale), int(img.shape[0] * scale))
+                    img = cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
+
+                cv2.imwrite(dst, img, encoding_params)
             except Exception as e:
                 print(f"Failed to process image {img_file}: {e}")
 
-            # Report image progress (0–90%)
             if progress_signal is not None:
                 percent = int((index + 1) / total_images * 90)
                 progress_signal.emit(percent)
@@ -175,9 +181,18 @@ class StdLibraryProvider(LibraryProvider):
 
         # Copy images one-by-one and update progress (0-100)
         for idx, src in enumerate(image_files, start=1):
-            dst = os.path.join(self._current_cache_folder, os.path.basename(src))
             try:
-                shutil.copy2(src, dst)
+                filename = os.path.basename(src)
+                if self._convert_to_lossless_format:
+                    name, _ = os.path.splitext(filename)
+                    img = cv2.imread(src, cv2.IMREAD_UNCHANGED)
+                    if img is None:
+                        print(f"[Warning] Could not load image: {src}")
+                        continue
+                    self.save_as_lossless(img, self._current_cache_folder, name)
+                else:
+                    dst = os.path.join(self._current_cache_folder, filename)
+                    shutil.copy2(src, dst)
             except Exception as e:
                 print(f"Failed to copy {src} → {dst}: {e}")
                 continue

@@ -1,0 +1,89 @@
+extending adalfarus::base;
+Fusion/os/new_st
+
+/* Start of QSS */
+QWidget {
+    color: $color_text;
+    background-color: $color_background;
+}
+QWidget:disabled {
+    color: $color_disabled_text;
+    background-color: $color_disabled_background;
+}
+QCheckBox, QRadioButton {
+    /*background-color: #e0e0e0;*/
+    border-radius: 5px;
+}
+QLabel {
+    border-radius: 5px;
+    padding: 5px;
+    background-color: $color_label_background; /*Before #d0d0d0, made it 6 lighter*/
+}
+QPushButton, QToolButton {
+    border: 1px solid $color_interactable_border;
+    border-radius: 5px;
+    padding: 5px;
+    background-color: $color_interactable_background;
+}
+QPushButton:hover, QToolButton:hover {
+    background-color: $color_interactable_hover;
+}
+
+QScrollBar:horizontal {
+    border: none;
+    background-color: $color_scrollbar_background;
+    height: 15px;
+    border-radius: 7px;
+}
+QScrollBar::handle:horizontal {
+    background-color: $color_interactable_background;
+    min-height: 15px;
+    min-width: 40px;
+    border-radius: 7px;
+}
+QScrollBar::handle:hover {
+    background-color: $color_interactable_hover;
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal,
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+    border: none;
+    background: none;
+}
+
+QScrollBar:vertical {
+    border: none;
+    background-color: $color_scrollbar_background;
+    width: 15px;
+    border-radius: 7px;
+}
+QScrollBar::handle:vertical {
+    background-color: $color_interactable_background;
+    min-height: 20px;
+    border-radius: 7px;
+}
+QScrollBar::handle:hover {
+    background-color: $color_interactable_hover;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    border: none;
+    background: none;
+}
+
+QScrollBar::corner {
+    border: none;
+}
+/* End of QSS */
+
+ph:
+color_text~=QPalette.Text;
+color_background~=QPalette.ToolTipBase;
+color_disabled_text~=darkGray;
+color_disabled_background~=QPalette.ToolTipBase;
+color_label_background~=QPalette.ToolTipBase;
+
+color_interactable_border~=QPalette.ToolTipText;
+color_interactable_background~=QPalette.ToolTipBase;
+color_interactable_hover~=QPalette.Midlight;
+
+color_scrollbar_background~=transparent;

@@ -104,7 +104,7 @@ class Settings:
             "hide_scrollbar": "False",
             "stay_on_top": "False",
             "geometry": "100, 100, 640, 480",
-            "advanced_settings": '{"recent_titles": [], "themes": {"light": "light_light", "dark": "light_dark", "font": "Segoe UI"}, "settings_file_path": "", "settings_file_mode": "overwrite", "misc": {"auto_export": false, "quality_preset": "quality", "max_cached_chapters": -1, "use_threading_for_pipeline_if_available": true, "image_processing_pipeline": []}}',
+            "advanced_settings": '{"recent_titles": [], "themes": {"light": "light_light", "dark": "light_dark", "font": "Segoe UI"}, "settings_file_path": "", "settings_file_mode": "overwrite", "misc": {"auto_export": false, "quality_preset": "quality", "max_cached_chapters": -1, "pipeline_mode": "parallel", "image_processing_pipeline": [], "use_opengl_scene_renderer": false}}',
             "chapter_rate": "1.0",
             "no_update_info": "True",
             "not_recommened_update_info": "True",
@@ -114,7 +114,8 @@ class Settings:
             "lazy_loading": "True",
             "save_last_titles": "True",
             "show_provider_logo": "True",
-            "show_tutorial": "True"
+            "show_tutorial": "True",
+            "convert_to_lossless": "False"
         }
         self.settings = self.default_settings.copy()
         if overwrite_settings:
@@ -167,7 +168,8 @@ class Settings:
             return float(value)
         elif key in ["downscaling", "upscaling", "borderless", "hide_titlebar", "hover_effect_all",
                      "acrylic_menus", "acrylic_background", "hide_scrollbar", "stay_on_top", "no_update_info",
-                     "update_info", "lazy_loading", "save_last_titles", "show_provider_logo", "show_tutorial"]:
+                     "update_info", "lazy_loading", "save_last_titles", "show_provider_logo", "show_tutorial",
+                     "convert_to_lossless"]:
             return self.boolean(value)
         elif key in ["manual_content_width", "current_lib_idx", "max_cached_chapters"]:
             return int(value)
@@ -189,7 +191,8 @@ class Settings:
             value = str(float(value))
         elif key in ["downscaling", "upscaling", "borderless", "hide_titlebar", "hover_effect_all",
                      "acrylic_menus", "acrylic_background", "hide_scrollbar", "stay_on_top", "no_update_info",
-                     "update_info", "lazy_loading", "save_last_titles", "show_provider_logo", "show_tutorial"]:
+                     "update_info", "lazy_loading", "save_last_titles", "show_provider_logo", "show_tutorial",
+                     "convert_to_lossless"]:
             value = str(value)
         elif key in ["manual_content_width", "current_lib_idx", "max_cached_chapters"]:
             value = str(int(value))
@@ -373,6 +376,12 @@ class Settings:
 
     def set_show_tutorial(self, value):
         self.set("show_tutorial", value)
+
+    def get_convert_to_lossless(self):
+        return self.get("convert_to_lossless")
+
+    def set_convert_to_lossless(self, value):
+        self.set("convert_to_lossless", value)
 
     def setup_database(self, settings):
         # Define tables and their columns
